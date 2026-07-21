@@ -14,16 +14,16 @@ jobs:
         include:
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: sftp-gui-windows-x64
+            artifact: shuttle-sftp-windows-x64
           - platform: macos-latest
             target: aarch64-apple-darwin
-            artifact: sftp-gui-macos-arm64
+            artifact: shuttle-sftp-macos-arm64
           - platform: macos-latest
             target: x86_64-apple-darwin
-            artifact: sftp-gui-macos-x64
+            artifact: shuttle-sftp-macos-x64
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            artifact: sftp-gui-linux-x64
+            artifact: shuttle-sftp-linux-x64
 
     runs-on: ${{ matrix.platform }}
 
