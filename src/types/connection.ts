@@ -1,0 +1,40 @@
+export interface ConnectionProfile {
+  id: string
+  name: string
+  host: string
+  port: number
+  username: string
+  authMethod: 'password' | 'key' | 'agent'
+  privateKeyPath?: string
+  defaultRemotePath?: string
+}
+
+export interface ConnectParams {
+  host: string
+  port: number
+  username: string
+  auth: PasswordAuth | KeyAuth | AgentAuth
+}
+
+export interface PasswordAuth {
+  type: 'password'
+  password: string
+}
+
+export interface KeyAuth {
+  type: 'key'
+  key_path: string
+  passphrase: string | null
+}
+
+export interface AgentAuth {
+  type: 'agent'
+}
+
+export interface SshHostEntry {
+  name: string
+  hostname: string | null
+  port: number | null
+  user: string | null
+  identityFile: string | null
+}
