@@ -46,6 +46,12 @@ const preview = ref<{
   loading: boolean
   data: FilePreview | null
 }>({ entry: null, loading: false, data: null })
+const previewCtxMenu = ref<{ visible: boolean; x: number; y: number; hasSelection: boolean }>({
+  visible: false,
+  x: 0,
+  y: 0,
+  hasSelection: false,
+})
 
 const currentPath = computed(() => tabsStore.activeTab?.currentPath || '/')
 const sessionId = computed(() => tabsStore.activeTab?.sessionId || '')
@@ -251,6 +257,7 @@ function onListDblClick(entry: FileEntry) {
 }
 
 function onListContextMenu(entry: FileEntry, event: MouseEvent) {
+  previewCtxMenu.value.visible = false
   if (!selectedPaths.value.has(entry.path)) {
     selectedPaths.value.clear()
     selectedPaths.value.add(entry.path)
@@ -260,6 +267,7 @@ function onListContextMenu(entry: FileEntry, event: MouseEvent) {
 
 // Context menu
 function onEntryContextMenu(colIndex: number, entry: FileEntry, event: MouseEvent) {
+  previewCtxMenu.value.visible = false
   if (!selectedPaths.value.has(entry.path)) {
     selectedPaths.value.clear()
     selectedPaths.value.add(entry.path)
@@ -271,6 +279,39 @@ function onEntryContextMenu(colIndex: number, entry: FileEntry, event: MouseEven
 
 function hideCtxMenu() {
   ctxMenu.value.visible = false
+  previewCtxMenu.value.visible = false
+}
+
+// Preview context menu (copy)
+function onPreviewContextMenu(event: MouseEvent) {
+  ctxMenu.value.visible = false
+  const selection = window.getSelection()?.toString() ?? ''
+  previewCtxMenu.value = {
+    visible: true,
+    x: event.clientX,
+    y: event.clientY,
+    hasSelection: selection.length > 0,
+  }
+}
+
+async function copyToClipboard(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch (e) {
+    console.error('Clipboard write failed:', e)
+  }
+}
+
+async function copySelected() {
+  const selection = window.getSelection()?.toString() ?? ''
+  previewCtxMenu.value.visible = false
+  if (selection) await copyToClipboard(selection)
+}
+
+async function copyAll() {
+  previewCtxMenu.value.visible = false
+  const content = preview.value.data?.content
+  if (content) await copyToClipboard(content)
 }
 
 async function ctxDownload() {
@@ -461,7 +502,7 @@ watch(viewMode, () => {
       </div>
 
       <!-- Preview pane for the selected file -->
-      <div v-if="preview.entry" class="preview-col">
+      <div v-if="preview.entry" class="preview-col" @contextmenu.prevent="onPreviewContextMenu">
         <div class="preview-head">
           <span class="preview-icon">📄</span>
           <div class="preview-meta">
@@ -499,6 +540,25 @@ watch(viewMode, () => {
         @click="ctxSaveAs"
       >
         💾 Save As…
+      </button>
+    </div>
+
+    <!-- Preview copy menu -->
+    <div
+      v-if="previewCtxMenu.visible"
+      class="ctx-menu"
+      :style="{ left: previewCtxMenu.x + 'px', top: previewCtxMenu.y + 'px' }"
+      @click.stop
+    >
+      <button class="ctx-item" :disabled="!previewCtxMenu.hasSelection" @click="copySelected">
+        📋 Copy Selected
+      </button>
+      <button
+        class="ctx-item"
+        :disabled="!preview.data?.isText || !preview.data.content"
+        @click="copyAll"
+      >
+        📄 Copy All
       </button>
     </div>
   </div>
