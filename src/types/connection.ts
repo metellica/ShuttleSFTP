@@ -7,6 +7,10 @@ export interface ConnectionProfile {
   authMethod: 'password' | 'key' | 'agent'
   privateKeyPath?: string
   defaultRemotePath?: string
+  /** Present only when the user opted in to saving the password. */
+  password?: string
+  /** Present only when the user opted in (key passphrase). */
+  passphrase?: string
 }
 
 export interface ConnectParams {

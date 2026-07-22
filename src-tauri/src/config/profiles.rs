@@ -15,6 +15,12 @@ pub struct ConnectionProfile {
     pub auth_method: String, // "password" | "key" | "agent"
     pub private_key_path: Option<String>,
     pub default_remote_path: Option<String>,
+    /// Stored only when the user opts in to saving the password.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    /// Stored only when the user opts in (key passphrase).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passphrase: Option<String>,
 }
 
 /// Get the app config directory for storing profiles.

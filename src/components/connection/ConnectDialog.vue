@@ -1,14 +1,29 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { loadSshConfig, sshConnect } from '@/composables/useTauri'
-import type { SshHostEntry, ConnectParams } from '@/types/connection'
+import {
+  loadSshConfig,
+  sshConnect,
+  listProfiles,
+  saveProfile,
+} from '@/composables/useTauri'
+import type { SshHostEntry, ConnectParams, ConnectionProfile } from '@/types/connection'
 
 const emit = defineEmits<{
   close: []
   connected: [sessionId: string, label: string]
 }>()
 
+/** Unified dropdown item: saved profile or SSH config host. */
+interface HostOption {
+  kind: 'profile' | 'ssh'
+  name: string
+  hostname: string
+  profile?: ConnectionProfile
+  sshEntry?: SshHostEntry
+}
+
 const sshHosts = ref<SshHostEntry[]>([])
+const profiles = ref<ConnectionProfile[]>([])
 const host = ref('')
 const port = ref(22)
 const username = ref('')
@@ -21,6 +36,11 @@ const error = ref('')
 const showDropdown = ref(false)
 const highlightIndex = ref(0)
 const selectedAlias = ref('')
+const aliasName = ref('')
+const saveNode = ref(false)
+const savePassword = ref(false)
+const selectedProfileId = ref('')
+const fromSshConfig = ref(false)
 
 onMounted(async () => {
   try {
@@ -28,9 +48,30 @@ onMounted(async () => {
   } catch (e) {
     // SSH config may not exist
   }
+  try {
+    profiles.value = await listProfiles()
+  } catch (e) {
+    // Profiles file may not exist
+  }
 })
 
-// Fuzzy search over SSH config hosts
+const allOptions = computed<HostOption[]>(() => {
+  const profileOpts: HostOption[] = profiles.value.map((p) => ({
+    kind: 'profile',
+    name: p.name,
+    hostname: p.host,
+    profile: p,
+  }))
+  const sshOpts: HostOption[] = sshHosts.value.map((e) => ({
+    kind: 'ssh',
+    name: e.name,
+    hostname: e.hostname || '',
+    sshEntry: e,
+  }))
+  return [...profileOpts, ...sshOpts]
+})
+
+// Fuzzy search over saved profiles + SSH config hosts
 function isSubsequence(query: string, target: string): boolean {
   let i = 0
   for (const ch of target) {
@@ -40,23 +81,23 @@ function isSubsequence(query: string, target: string): boolean {
   return query.length === 0
 }
 
-function matchScore(query: string, entry: SshHostEntry): number {
-  const name = entry.name.toLowerCase()
-  const hostname = (entry.hostname || '').toLowerCase()
+function matchScore(query: string, opt: HostOption): number {
+  const name = opt.name.toLowerCase()
+  const hostname = opt.hostname.toLowerCase()
   if (name.startsWith(query) || hostname.startsWith(query)) return 3
   if (name.includes(query) || hostname.includes(query)) return 2
   if (isSubsequence(query, name) || isSubsequence(query, hostname)) return 1
   return 0
 }
 
-const filteredHosts = computed(() => {
+const filteredOptions = computed(() => {
   const q = host.value.trim().toLowerCase()
-  if (!q) return sshHosts.value
-  return sshHosts.value
-    .map((e) => ({ e, s: matchScore(q, e) }))
+  if (!q) return allOptions.value
+  return allOptions.value
+    .map((o) => ({ o, s: matchScore(q, o) }))
     .filter((x) => x.s > 0)
     .sort((a, b) => b.s - a.s)
-    .map((x) => x.e)
+    .map((x) => x.o)
 })
 
 function openDropdown() {
@@ -65,34 +106,86 @@ function openDropdown() {
 }
 
 function onHostInput() {
-  // Manual edit invalidates the previously chosen alias
+  // Manual edit invalidates the previously chosen alias/profile
   selectedAlias.value = ''
+  selectedProfileId.value = ''
+  fromSshConfig.value = false
   openDropdown()
 }
 
 function moveHighlight(delta: number) {
-  if (!showDropdown.value || filteredHosts.value.length === 0) return
-  const len = filteredHosts.value.length
+  if (!showDropdown.value || filteredOptions.value.length === 0) return
+  const len = filteredOptions.value.length
   highlightIndex.value = (highlightIndex.value + delta + len) % len
 }
 
 function chooseHighlighted() {
   if (showDropdown.value) {
-    const entry = filteredHosts.value[highlightIndex.value]
-    if (entry) selectHost(entry)
+    const opt = filteredOptions.value[highlightIndex.value]
+    if (opt) selectOption(opt)
   }
 }
 
-function selectHost(entry: SshHostEntry) {
-  host.value = entry.hostname || entry.name
-  selectedAlias.value = entry.name
-  if (entry.port) port.value = entry.port
-  if (entry.user) username.value = entry.user
-  if (entry.identityFile) {
-    authType.value = 'key'
-    keyPath.value = entry.identityFile
+function selectOption(opt: HostOption) {
+  if (opt.kind === 'profile' && opt.profile) {
+    const p = opt.profile
+    host.value = p.host
+    port.value = p.port
+    username.value = p.username
+    selectedAlias.value = p.name
+    aliasName.value = p.name
+    selectedProfileId.value = p.id
+    fromSshConfig.value = false
+    saveNode.value = true
+    if (p.authMethod === 'key') {
+      authType.value = 'key'
+      keyPath.value = p.privateKeyPath || ''
+      passphrase.value = p.passphrase || ''
+    } else {
+      authType.value = 'password'
+      password.value = p.password || ''
+    }
+    savePassword.value = !!(p.password || p.passphrase)
+  } else if (opt.sshEntry) {
+    const entry = opt.sshEntry
+    host.value = entry.hostname || entry.name
+    selectedAlias.value = entry.name
+    aliasName.value = entry.name
+    selectedProfileId.value = ''
+    // SSH config hosts are managed in ~/.ssh/config — don't re-save them
+    fromSshConfig.value = true
+    saveNode.value = false
+    savePassword.value = false
+    if (entry.port) port.value = entry.port
+    if (entry.user) username.value = entry.user
+    if (entry.identityFile) {
+      authType.value = 'key'
+      keyPath.value = entry.identityFile
+    }
   }
   showDropdown.value = false
+}
+
+async function persistProfile() {
+  const profile: ConnectionProfile = {
+    id: selectedProfileId.value || crypto.randomUUID(),
+    name: aliasName.value.trim() || selectedAlias.value || host.value,
+    host: host.value,
+    port: port.value,
+    username: username.value,
+    authMethod: authType.value,
+  }
+  if (authType.value === 'key') {
+    profile.privateKeyPath = keyPath.value
+    if (savePassword.value && passphrase.value) profile.passphrase = passphrase.value
+  } else if (savePassword.value && password.value) {
+    profile.password = password.value
+  }
+  try {
+    await saveProfile(profile)
+  } catch (e) {
+    console.error('Failed to save profile:', e)
+  }
 }
 
 async function doConnect() {
@@ -111,8 +204,12 @@ async function doConnect() {
 
   try {
     const sessionId = await sshConnect(params)
-    // Prefer the SSH config alias for the tab label, fall back to host/IP
-    emit('connected', sessionId, `${username.value}@${selectedAlias.value || host.value}`)
+    if (saveNode.value) {
+      await persistProfile()
+    }
+    // Tab label: alias name > ssh config alias > host/IP
+    const label = aliasName.value.trim() || selectedAlias.value || host.value
+    emit('connected', sessionId, `${username.value}@${label}`)
   } catch (e: any) {
     error.value = e?.toString() || 'Connection failed'
   } finally {
@@ -131,7 +228,7 @@ async function doConnect() {
           <label>Host</label>
           <input
             v-model="host"
-            placeholder="hostname or IP — type to search SSH config"
+            placeholder="hostname or IP — type to search saved & SSH config hosts"
             autocomplete="off"
             @focus="openDropdown"
             @input="onHostInput"
@@ -141,17 +238,18 @@ async function doConnect() {
             @keydown.enter.prevent="chooseHighlighted"
             @keydown.esc="showDropdown = false"
           />
-          <div v-if="showDropdown && filteredHosts.length" class="combo-list">
+          <div v-if="showDropdown && filteredOptions.length" class="combo-list">
             <div
-              v-for="(entry, i) in filteredHosts"
-              :key="entry.name"
+              v-for="(opt, i) in filteredOptions"
+              :key="opt.kind + ':' + opt.name"
               class="combo-item"
               :class="{ highlighted: i === highlightIndex }"
-              @mousedown.prevent="selectHost(entry)"
+              @mousedown.prevent="selectOption(opt)"
               @mousemove="highlightIndex = i"
             >
-              <span class="combo-name">{{ entry.name }}</span>
-              <span class="combo-host">{{ entry.hostname }}</span>
+              <span class="combo-kind">{{ opt.kind === 'profile' ? '⭐' : '📋' }}</span>
+              <span class="combo-name">{{ opt.name }}</span>
+              <span class="combo-host">{{ opt.hostname }}</span>
             </div>
           </div>
         </div>
@@ -187,6 +285,26 @@ async function doConnect() {
             <input v-model="passphrase" type="password" />
           </div>
         </template>
+
+        <div class="field">
+          <label>Alias Name (shown on tab)</label>
+          <input v-model="aliasName" placeholder="e.g. prod-server" autocomplete="off" />
+        </div>
+
+        <div class="checks">
+          <label class="check" :class="{ disabled: fromSshConfig }">
+            <input type="checkbox" v-model="saveNode" :disabled="fromSshConfig" />
+            <span>Save connection{{ fromSshConfig ? ' (managed by ~/.ssh/config)' : '' }}</span>
+          </label>
+          <label class="check" :class="{ disabled: !saveNode || fromSshConfig }">
+            <input
+              type="checkbox"
+              v-model="savePassword"
+              :disabled="!saveNode || fromSshConfig"
+            />
+            <span>Save {{ authType === 'key' ? 'passphrase' : 'password' }} (plain text)</span>
+          </label>
+        </div>
       </div>
 
       <div v-if="error" class="error">{{ error }}</div>
@@ -264,6 +382,40 @@ h2 {
 .combo-name {
   color: #89b4fa;
   font-weight: 600;
+}
+
+.combo-kind {
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.checks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #cdd6f4;
+  cursor: pointer;
+  user-select: none;
+}
+
+.check input[type='checkbox'] {
+  accent-color: #4f6ec2;
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+
+.check.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .combo-host {
