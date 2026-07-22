@@ -22,6 +22,19 @@ const columns = ref<Column[]>([])
 const dragOver = ref(false)
 const selectedPaths = ref<Set<string>>(new Set())
 const columnsEl = ref<HTMLElement | null>(null)
+
+type ViewMode = 'columns' | 'list'
+const viewMode = ref<ViewMode>(
+  (localStorage.getItem('viewMode') as ViewMode) === 'list' ? 'list' : 'columns'
+)
+const listEntries = ref<FileEntry[]>([])
+const listLoading = ref(false)
+
+function setViewMode(mode: ViewMode) {
+  if (viewMode.value === mode) return
+  viewMode.value = mode
+  localStorage.setItem('viewMode', mode)
+}
 const ctxMenu = ref<{ visible: boolean; x: number; y: number; entry: FileEntry | null }>({
   visible: false,
   x: 0,
@@ -49,8 +62,10 @@ const breadcrumbs = computed(() => {
   return crumbs
 })
 
-// Selected files across all columns (for toolbar download)
-const allEntries = computed(() => columns.value.flatMap((c) => c.entries))
+// Selected files across the active view (for toolbar download)
+const allEntries = computed(() =>
+  viewMode.value === 'columns' ? columns.value.flatMap((c) => c.entries) : listEntries.value
+)
 const selectedFiles = computed(() =>
   allEntries.value.filter((f) => selectedPaths.value.has(f.path))
 )
@@ -103,8 +118,24 @@ function scrollToEnd() {
   })
 }
 
+async function loadList(path: string) {
+  if (!sessionId.value) return
+  listLoading.value = true
+  try {
+    listEntries.value = sortEntries(await listDir(sessionId.value, path))
+  } catch (e) {
+    console.error('Failed to list directory:', e)
+  } finally {
+    listLoading.value = false
+  }
+}
+
 async function refresh() {
-  await buildColumns(currentPath.value)
+  if (viewMode.value === 'columns') {
+    await buildColumns(currentPath.value)
+  } else {
+    await loadList(currentPath.value)
+  }
 }
 
 function navigateTo(path: string) {
@@ -187,6 +218,44 @@ function formatSize(bytes: number): string {
     i++
   }
   return `${size.toFixed(i === 0 ? 0 : 1)} ${units[i]}`
+}
+
+function formatDate(ts: number): string {
+  if (!ts) return '-'
+  return new Date(ts * 1000).toLocaleString()
+}
+
+// Explorer list view interactions
+function onListClick(entry: FileEntry, event: MouseEvent) {
+  if (event.ctrlKey || event.metaKey) {
+    if (selectedPaths.value.has(entry.path)) {
+      selectedPaths.value.delete(entry.path)
+    } else {
+      selectedPaths.value.add(entry.path)
+    }
+    return
+  }
+  selectedPaths.value.clear()
+  selectedPaths.value.add(entry.path)
+  if (entry.isDir) {
+    preview.value = { entry: null, loading: false, data: null }
+  } else {
+    loadPreview(entry)
+  }
+}
+
+function onListDblClick(entry: FileEntry) {
+  if (entry.isDir) {
+    navigateTo(entry.path)
+  }
+}
+
+function onListContextMenu(entry: FileEntry, event: MouseEvent) {
+  if (!selectedPaths.value.has(entry.path)) {
+    selectedPaths.value.clear()
+    selectedPaths.value.add(entry.path)
+  }
+  ctxMenu.value = { visible: true, x: event.clientX, y: event.clientY, entry }
 }
 
 // Context menu
@@ -278,10 +347,24 @@ watch(
     }
     selectedPaths.value.clear()
     preview.value = { entry: null, loading: false, data: null }
-    buildColumns(newPath)
+    if (viewMode.value === 'columns') {
+      buildColumns(newPath)
+    } else {
+      loadList(newPath)
+    }
   },
   { immediate: true }
 )
+
+watch(viewMode, () => {
+  selectedPaths.value.clear()
+  preview.value = { entry: null, loading: false, data: null }
+  if (viewMode.value === 'columns') {
+    buildColumns(currentPath.value)
+  } else {
+    loadList(currentPath.value)
+  }
+})
 </script>
 
 <template>
@@ -298,34 +381,86 @@ watch(
           {{ crumb.name }}
         </button>
       </template>
+      <span class="path-spacer" />
+      <div class="view-toggle">
+        <button
+          class="toggle-btn"
+          :class="{ active: viewMode === 'columns' }"
+          title="Column view (Finder)"
+          @click="setViewMode('columns')"
+        >
+          ▦
+        </button>
+        <button
+          class="toggle-btn"
+          :class="{ active: viewMode === 'list' }"
+          title="Details view (Explorer)"
+          @click="setViewMode('list')"
+        >
+          ☰
+        </button>
+      </div>
     </div>
 
-    <!-- Finder-style Miller columns -->
-    <div class="columns" ref="columnsEl">
-      <div v-for="(col, colIndex) in columns" :key="col.path" class="column">
-        <div v-if="col.loading" class="col-loading">Loading...</div>
+    <div class="body">
+      <!-- Finder-style Miller columns -->
+      <div v-if="viewMode === 'columns'" class="columns" ref="columnsEl">
+        <div v-for="(col, colIndex) in columns" :key="col.path" class="column">
+          <div v-if="col.loading" class="col-loading">Loading...</div>
+          <template v-else>
+            <div
+              v-for="entry in col.entries"
+              :key="entry.path"
+              class="entry"
+              :class="{
+                selected: selectedPaths.has(entry.path),
+                opened: col.selectedPath === entry.path,
+              }"
+              @click="onEntryClick(colIndex, entry, $event)"
+              @contextmenu.prevent="onEntryContextMenu(colIndex, entry, $event)"
+            >
+              <span class="entry-icon">{{ entry.isDir ? '📁' : '📄' }}</span>
+              <span class="entry-name" :title="entry.name">{{ entry.name }}</span>
+              <span v-if="!entry.isDir" class="entry-size">{{ formatSize(entry.size) }}</span>
+              <span v-else class="entry-arrow">›</span>
+            </div>
+            <div v-if="col.entries.length === 0" class="col-empty">Empty</div>
+          </template>
+        </div>
+      </div>
+
+      <!-- Windows Explorer-style details list -->
+      <div v-else class="list-view">
+        <div v-if="listLoading" class="col-loading">Loading...</div>
         <template v-else>
-          <div
-            v-for="entry in col.entries"
-            :key="entry.path"
-            class="entry"
-            :class="{
-              selected: selectedPaths.has(entry.path),
-              opened: col.selectedPath === entry.path,
-            }"
-            @click="onEntryClick(colIndex, entry, $event)"
-            @contextmenu.prevent="onEntryContextMenu(colIndex, entry, $event)"
-          >
-            <span class="entry-icon">{{ entry.isDir ? '📁' : '📄' }}</span>
-            <span class="entry-name" :title="entry.name">{{ entry.name }}</span>
-            <span v-if="!entry.isDir" class="entry-size">{{ formatSize(entry.size) }}</span>
-            <span v-else class="entry-arrow">›</span>
+          <div class="file-header">
+            <span class="col-name">Name</span>
+            <span class="col-size">Size</span>
+            <span class="col-perm">Permissions</span>
+            <span class="col-date">Modified</span>
           </div>
-          <div v-if="col.entries.length === 0" class="col-empty">Empty</div>
+          <div
+            v-for="entry in listEntries"
+            :key="entry.path"
+            class="file-row"
+            :class="{ selected: selectedPaths.has(entry.path) }"
+            @click="onListClick(entry, $event)"
+            @dblclick="onListDblClick(entry)"
+            @contextmenu.prevent="onListContextMenu(entry, $event)"
+          >
+            <span class="col-name">
+              <span class="entry-icon">{{ entry.isDir ? '📁' : '📄' }}</span>
+              {{ entry.name }}
+            </span>
+            <span class="col-size">{{ entry.isDir ? '-' : formatSize(entry.size) }}</span>
+            <span class="col-perm">{{ entry.permissions || '-' }}</span>
+            <span class="col-date">{{ formatDate(entry.modified) }}</span>
+          </div>
+          <div v-if="listEntries.length === 0" class="col-empty">Empty directory</div>
         </template>
       </div>
 
-      <!-- Preview column for the selected file -->
+      <!-- Preview pane for the selected file -->
       <div v-if="preview.entry" class="preview-col">
         <div class="preview-head">
           <span class="preview-icon">📄</span>
@@ -417,6 +552,44 @@ watch(
 .crumb-sep {
   color: #6c7086;
   font-size: 12px;
+}
+
+.path-spacer {
+  flex: 1;
+}
+
+.view-toggle {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.toggle-btn {
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: #6c7086;
+  cursor: pointer;
+  padding: 2px 8px;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.toggle-btn:hover {
+  background: #313244;
+  color: #cdd6f4;
+}
+
+.toggle-btn.active {
+  background: #4f6ec2;
+  color: #ffffff;
+}
+
+.body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  background: #181825;
 }
 
 .columns {
@@ -511,13 +684,80 @@ watch(
   font-size: 12px;
 }
 
-.preview-col {
-  min-width: 320px;
+/* Explorer-style details list */
+.list-view {
   flex: 1;
+  overflow-y: auto;
+  background: #1e1e2e;
+}
+
+.file-header,
+.file-row {
+  display: grid;
+  grid-template-columns: 1fr 90px 110px 170px;
+  padding: 6px 14px;
+  font-size: 13px;
+  align-items: center;
+}
+
+.file-header {
+  background: #181825;
+  color: #6c7086;
+  font-size: 12px;
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  border-bottom: 1px solid #2a2a3d;
+}
+
+.file-row {
+  cursor: pointer;
+  color: #cdd6f4;
+  transition: background 0.08s;
+}
+
+.file-row:hover {
+  background: #28283c;
+}
+
+.file-row.selected {
+  background: #4f6ec2;
+  color: #ffffff;
+}
+
+.file-row.selected .col-size,
+.file-row.selected .col-perm,
+.file-row.selected .col-date {
+  color: #c8d4f5;
+}
+
+.col-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.col-size,
+.col-perm,
+.col-date {
+  color: #6c7086;
+  font-size: 12px;
+}
+
+.col-perm {
+  font-family: 'Cascadia Code', Consolas, monospace;
+}
+
+.preview-col {
+  width: 340px;
   height: 100%;
   overflow-y: auto;
   background: #1e1e2e;
-  border-right: 1px solid #2a2a3d;
+  border-left: 1px solid #2a2a3d;
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
