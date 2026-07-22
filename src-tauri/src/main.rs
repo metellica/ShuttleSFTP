@@ -19,6 +19,7 @@ fn main() {
             shuttle_sftp::commands::filesystem::mkdir,
             shuttle_sftp::commands::filesystem::remove,
             shuttle_sftp::commands::filesystem::rename,
+            shuttle_sftp::commands::filesystem::preview_file,
             shuttle_sftp::commands::transfer::upload,
             shuttle_sftp::commands::transfer::download,
             shuttle_sftp::commands::transfer::download_as,

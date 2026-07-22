@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import type { ConnectParams, SshHostEntry, ConnectionProfile } from '@/types/connection'
-import type { FileEntry } from '@/types/filesystem'
+import type { FileEntry, FilePreview } from '@/types/filesystem'
 import type { TransferTask } from '@/types/transfer'
 
 // Connection
@@ -22,6 +22,9 @@ export const removeEntry = (sessionId: string, path: string, isDir: boolean) =>
 
 export const renameEntry = (sessionId: string, oldPath: string, newPath: string) =>
   invoke<void>('rename', { sessionId, oldPath, newPath })
+
+export const previewFile = (sessionId: string, path: string) =>
+  invoke<FilePreview>('preview_file', { sessionId, path })
 
 // Transfer
 export const uploadFiles = (sessionId: string, localPaths: string[], remoteDir: string) =>

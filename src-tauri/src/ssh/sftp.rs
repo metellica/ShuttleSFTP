@@ -183,6 +183,32 @@ impl SftpClient {
             .map_err(|e| AppError::SftpError(e.to_string()))
     }
 
+    /// Read up to `max_bytes` from the start of a remote file.
+    pub async fn read_head(&self, path: &str, max_bytes: usize) -> AppResult<Vec<u8>> {
+        use tokio::io::AsyncReadExt;
+
+        let mut file = self
+            .sftp
+            .open(path)
+            .await
+            .map_err(|e| AppError::SftpError(e.to_string()))?;
+
+        let mut buf = Vec::with_capacity(max_bytes.min(64 * 1024));
+        let mut chunk = vec![0u8; 16 * 1024];
+        while buf.len() < max_bytes {
+            let n = file
+                .read(&mut chunk)
+                .await
+                .map_err(|e| AppError::SftpError(e.to_string()))?;
+            if n == 0 {
+                break;
+            }
+            let take = n.min(max_bytes - buf.len());
+            buf.extend_from_slice(&chunk[..take]);
+        }
+        Ok(buf)
+    }
+
     /// Get the underlying SFTP session for transfer operations.
     pub fn sftp_session(&self) -> &SftpSession {
         &self.sftp

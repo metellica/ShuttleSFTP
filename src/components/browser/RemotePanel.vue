@@ -4,8 +4,8 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { useTabsStore } from '@/stores/tabs'
 import { useTransferStore } from '@/stores/transfer'
-import { listDir, uploadFiles, downloadFiles, downloadFileAs } from '@/composables/useTauri'
-import type { FileEntry } from '@/types/filesystem'
+import { listDir, uploadFiles, downloadFiles, downloadFileAs, previewFile } from '@/composables/useTauri'
+import type { FileEntry, FilePreview } from '@/types/filesystem'
 
 interface Column {
   /** Directory this column lists. */
@@ -28,6 +28,11 @@ const ctxMenu = ref<{ visible: boolean; x: number; y: number; entry: FileEntry |
   y: 0,
   entry: null,
 })
+const preview = ref<{
+  entry: FileEntry | null
+  loading: boolean
+  data: FilePreview | null
+}>({ entry: null, loading: false, data: null })
 
 const currentPath = computed(() => tabsStore.activeTab?.currentPath || '/')
 const sessionId = computed(() => tabsStore.activeTab?.sessionId || '')
@@ -127,6 +132,7 @@ async function onEntryClick(colIndex: number, entry: FileEntry, event: MouseEven
   col.selectedPath = entry.path
 
   if (entry.isDir) {
+    preview.value = { entry: null, loading: false, data: null }
     // Trim deeper columns and append the new directory column
     columns.value = columns.value.slice(0, colIndex + 1)
     const newCol = await loadColumn(entry.path)
@@ -143,6 +149,30 @@ async function onEntryClick(colIndex: number, entry: FileEntry, event: MouseEven
     if (tabsStore.activeTab && tabsStore.activeTab.currentPath !== col.path) {
       suppressWatch = true
       tabsStore.updateTab(tabsStore.activeTab.id, { currentPath: col.path })
+    }
+    loadPreview(entry)
+    scrollToEnd()
+  }
+}
+
+const PREVIEWABLE_SIZE = 10 * 1024 * 1024 // don't preview files larger than 10MB
+
+async function loadPreview(entry: FileEntry) {
+  preview.value = { entry, loading: true, data: null }
+  if (entry.size > PREVIEWABLE_SIZE || !sessionId.value) {
+    preview.value = { entry, loading: false, data: null }
+    return
+  }
+  try {
+    const data = await previewFile(sessionId.value, entry.path)
+    // Ignore stale responses after user clicked another file
+    if (preview.value.entry?.path === entry.path) {
+      preview.value = { entry, loading: false, data }
+    }
+  } catch (e) {
+    console.error('Preview failed:', e)
+    if (preview.value.entry?.path === entry.path) {
+      preview.value = { entry, loading: false, data: null }
     }
   }
 }
@@ -247,6 +277,7 @@ watch(
       return
     }
     selectedPaths.value.clear()
+    preview.value = { entry: null, loading: false, data: null }
     buildColumns(newPath)
   },
   { immediate: true }
@@ -292,6 +323,25 @@ watch(
           </div>
           <div v-if="col.entries.length === 0" class="col-empty">Empty</div>
         </template>
+      </div>
+
+      <!-- Preview column for the selected file -->
+      <div v-if="preview.entry" class="preview-col">
+        <div class="preview-head">
+          <span class="preview-icon">📄</span>
+          <div class="preview-meta">
+            <div class="preview-name" :title="preview.entry.name">{{ preview.entry.name }}</div>
+            <div class="preview-info">{{ formatSize(preview.entry.size) }}</div>
+          </div>
+        </div>
+        <div v-if="preview.loading" class="preview-status">Loading preview…</div>
+        <template v-else-if="preview.data?.isText && preview.data.content !== null">
+          <pre class="preview-text">{{ preview.data.content }}</pre>
+          <div v-if="preview.data.truncated" class="preview-status">
+            — preview truncated —
+          </div>
+        </template>
+        <div v-else class="preview-status">No preview available (binary or large file)</div>
       </div>
     </div>
 
@@ -459,6 +509,70 @@ watch(
   height: 60px;
   color: #6c7086;
   font-size: 12px;
+}
+
+.preview-col {
+  min-width: 320px;
+  flex: 1;
+  height: 100%;
+  overflow-y: auto;
+  background: #1e1e2e;
+  border-right: 1px solid #2a2a3d;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.preview-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #2a2a3d;
+  flex-shrink: 0;
+}
+
+.preview-icon {
+  font-size: 26px;
+}
+
+.preview-meta {
+  overflow: hidden;
+}
+
+.preview-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #cdd6f4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-info {
+  font-size: 11px;
+  color: #6c7086;
+  margin-top: 2px;
+}
+
+.preview-text {
+  flex: 1;
+  margin: 0;
+  padding: 12px 14px;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #cdd6f4;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-y: auto;
+}
+
+.preview-status {
+  padding: 14px;
+  color: #6c7086;
+  font-size: 12px;
+  text-align: center;
 }
 
 .drop-overlay {
