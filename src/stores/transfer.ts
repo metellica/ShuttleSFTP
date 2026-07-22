@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { listTransfers } from '@/composables/useTauri'
 import type { TransferTask } from '@/types/transfer'
 
 export const useTransferStore = defineStore('transfer', () => {
@@ -24,5 +25,10 @@ export const useTransferStore = defineStore('transfer', () => {
     )
   }
 
-  return { tasks, addTask, updateTask, removeTask, clearCompleted }
+  /** Pull the authoritative task list from the backend. */
+  async function syncTasks() {
+    tasks.value = await listTransfers()
+  }
+
+  return { tasks, addTask, updateTask, removeTask, clearCompleted, syncTasks }
 })

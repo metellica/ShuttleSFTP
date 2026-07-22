@@ -1,3 +1,6 @@
+// Hide the console window on Windows in release builds
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use shuttle_sftp::ssh::SessionManager;
 use shuttle_sftp::transfer::TransferEngine;
 
@@ -18,6 +21,7 @@ fn main() {
             shuttle_sftp::commands::filesystem::rename,
             shuttle_sftp::commands::transfer::upload,
             shuttle_sftp::commands::transfer::download,
+            shuttle_sftp::commands::transfer::download_as,
             shuttle_sftp::commands::transfer::cancel_transfer,
             shuttle_sftp::commands::transfer::list_transfers,
             shuttle_sftp::commands::config::load_ssh_config,

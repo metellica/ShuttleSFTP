@@ -8,11 +8,13 @@ A fast, lightweight, cross-platform SFTP/SCP GUI built with **Tauri 2 + Vue 3 + 
 ## Features
 
 - 🚀 **High Performance** — Async Rust backend powered by `russh` + `tokio`
-- 📁 **Remote File Browser** — Single-panel design, browse remote servers with ease
-- 🖱️ **Drag & Drop** — Drag files from your OS file manager to upload, drag from app to download
+- 📁 **Finder-Style Browser** — macOS Finder-like Miller columns with clickable breadcrumb path bar
+- 🖱️ **Drag & Drop Upload** — Drag files from your OS file manager to upload
+- ⬇️ **Flexible Download** — Toolbar download, right-click **Download…** / **Save As…** context menu
 - 🔑 **Flexible Auth** — Password, private key (with passphrase), SSH agent
-- 📋 **SSH Config** — Auto-loads `~/.ssh/config` hosts
-- 🗂️ **Multi-Tab** — Multiple concurrent SFTP sessions in tabs
+- 📋 **SSH Config** — Auto-loads `~/.ssh/config` hosts with fuzzy-search dropdown
+- 🗂️ **Multi-Tab** — Multiple concurrent SFTP sessions in tabs (labeled by SSH alias)
+- 📊 **Transfer Queue** — Live progress, speed, and status for concurrent transfers
 - 📦 **Tiny Binary** — ~10MB app bundle (vs ~150MB for Electron alternatives)
 - 🖥️ **Cross-Platform** — Native on Windows, macOS, and Linux
 
@@ -91,10 +93,10 @@ ShuttleSFTP/
 
 1. Launch the app
 2. Click **+** or **Connect** to open a new session
-3. Select a host from your SSH config or enter connection details manually
-4. Browse remote files — double-click to navigate directories
-5. **Upload**: Drag files from your desktop/file manager into the app
-6. **Download**: Select files → click Download → choose local folder
+3. Type in the Host field to fuzzy-search your SSH config hosts, or enter connection details manually
+4. Browse remote files in Finder-style columns — click a directory to expand it in the next column, click any breadcrumb segment to jump back
+5. **Upload**: Drag files from your desktop/file manager into the app, or use the Upload button
+6. **Download**: Select files (Ctrl+click for multi-select) → click Download, or right-click → **Download…** / **Save As…**
 
 ## CI / Releases
 
@@ -111,8 +113,11 @@ GitHub Actions will produce platform-specific installers as artifacts.
 
 - [x] Multi-tab SFTP sessions
 - [x] Password + private key auth
-- [x] SSH config loading
-- [x] Drag & drop upload/download
+- [x] SSH config loading with fuzzy search
+- [x] Drag & drop upload
+- [x] Download / Save As via context menu
+- [x] Finder-style column view with breadcrumb navigation
+- [x] Transfer queue with progress events
 - [ ] SSH agent forwarding
 - [ ] Bookmarks & favorites
 - [ ] Integrated SSH terminal

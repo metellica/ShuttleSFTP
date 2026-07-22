@@ -30,6 +30,9 @@ export const uploadFiles = (sessionId: string, localPaths: string[], remoteDir: 
 export const downloadFiles = (sessionId: string, remotePaths: string[], localDir: string) =>
   invoke<string[]>('download', { sessionId, remotePaths, localDir })
 
+export const downloadFileAs = (sessionId: string, remotePath: string, localPath: string) =>
+  invoke<string>('download_as', { sessionId, remotePath, localPath })
+
 export const cancelTransfer = (taskId: string) =>
   invoke<void>('cancel_transfer', { taskId })
 

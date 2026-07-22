@@ -5,16 +5,58 @@ import Toolbar from '@/components/layout/Toolbar.vue'
 import ConnectDialog from '@/components/connection/ConnectDialog.vue'
 import RemotePanel from '@/components/browser/RemotePanel.vue'
 import TransferQueue from '@/components/transfer/TransferQueue.vue'
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
+import { open } from '@tauri-apps/plugin-dialog'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { uploadFiles, downloadFiles, mkDir } from '@/composables/useTauri'
+import { useTransferStore } from '@/stores/transfer'
+import type { TransferProgress, TransferTask } from '@/types/transfer'
 
 const tabsStore = useTabsStore()
+const transferStore = useTransferStore()
 const showConnectDialog = ref(false)
+const remotePanelRef = ref<InstanceType<typeof RemotePanel> | null>(null)
+const unlisteners: UnlistenFn[] = []
 
-onMounted(() => {
+function preventDefaultContextMenu(e: MouseEvent) {
+  e.preventDefault()
+}
+
+onMounted(async () => {
+  document.addEventListener('contextmenu', preventDefaultContextMenu)
   if (tabsStore.tabs.length === 0) {
     tabsStore.addTab()
     showConnectDialog.value = true
   }
+
+  unlisteners.push(
+    await listen<TransferProgress>('transfer:progress', (e) => {
+      transferStore.updateTask(e.payload.taskId, {
+        transferredBytes: e.payload.transferredBytes,
+        totalBytes: e.payload.totalBytes,
+      })
+    })
+  )
+  unlisteners.push(
+    await listen<{ taskId: string; status: TransferTask['status'] }>(
+      'transfer:status',
+      (e) => {
+        transferStore.updateTask(e.payload.taskId, { status: e.payload.status })
+        if (e.payload.status === 'completed') {
+          const task = transferStore.tasks.find((t) => t.id === e.payload.taskId)
+          // Refresh unless we know it was a download (remote dir unchanged)
+          if (!task || task.direction === 'upload') {
+            remotePanelRef.value?.refresh()
+          }
+        }
+      }
+    )
+  )
+})
+
+onUnmounted(() => {
+  document.removeEventListener('contextmenu', preventDefaultContextMenu)
+  unlisteners.forEach((u) => u())
 })
 
 function onNewTab() {
@@ -33,14 +75,84 @@ function onConnected(sessionId: string, label: string) {
   }
   showConnectDialog.value = false
 }
+
+async function onUpload() {
+  const tab = tabsStore.activeTab
+  if (!tab?.sessionId) return
+
+  const selected = await open({
+    multiple: true,
+    directory: false,
+    title: 'Select files to upload',
+  })
+  if (!selected) return
+
+  const paths = Array.isArray(selected) ? selected : [selected]
+  try {
+    await uploadFiles(tab.sessionId, paths, tab.currentPath)
+    await transferStore.syncTasks()
+  } catch (e) {
+    console.error('Upload failed:', e)
+  }
+}
+
+async function onDownload() {
+  const tab = tabsStore.activeTab
+  if (!tab?.sessionId) return
+
+  const selectedFiles = remotePanelRef.value?.selectedFiles
+  if (!selectedFiles || selectedFiles.length === 0) return
+
+  const localDir = await open({
+    directory: true,
+    title: 'Choose download location',
+  })
+  if (!localDir) return
+
+  const remotePaths = selectedFiles.map((f) => f.path)
+  try {
+    await downloadFiles(tab.sessionId, remotePaths, localDir as string)
+    await transferStore.syncTasks()
+  } catch (e) {
+    console.error('Download failed:', e)
+  }
+}
+
+function onRefresh() {
+  remotePanelRef.value?.refresh()
+}
+
+async function onNewFolder() {
+  const tab = tabsStore.activeTab
+  if (!tab?.sessionId) return
+
+  const name = prompt('Enter folder name:')
+  if (!name) return
+
+  const path = tab.currentPath === '/'
+    ? `/${name}`
+    : `${tab.currentPath}/${name}`
+  try {
+    await mkDir(tab.sessionId, path)
+    remotePanelRef.value?.refresh()
+  } catch (e) {
+    console.error('Create folder failed:', e)
+  }
+}
 </script>
 
 <template>
   <div class="app-container">
     <TabBar @new-tab="onNewTab" />
-    <Toolbar @connect="showConnectDialog = true" />
+    <Toolbar
+      @connect="showConnectDialog = true"
+      @upload="onUpload"
+      @download="onDownload"
+      @refresh="onRefresh"
+      @new-folder="onNewFolder"
+    />
     <main class="main-content">
-      <RemotePanel v-if="tabsStore.activeTab?.status === 'connected'" />
+      <RemotePanel v-if="tabsStore.activeTab?.status === 'connected'" ref="remotePanelRef" />
       <div v-else class="empty-state">
         <p>Click "Connect" or press the + tab to start a new SFTP session</p>
       </div>
@@ -64,6 +176,33 @@ function onConnected(sessionId: string, label: string) {
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   overflow: hidden;
+}
+
+/* Flat themed scrollbars (WebView2 / Chromium) */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #4f6ec2;
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #6b8ae0;
+}
+
+::-webkit-scrollbar-thumb:active {
+  background: #89b4fa;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 </style>
 

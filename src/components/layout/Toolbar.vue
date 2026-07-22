@@ -1,5 +1,11 @@
 <script setup lang="ts">
-const emit = defineEmits<{ connect: [] }>()
+const emit = defineEmits<{
+  connect: []
+  upload: []
+  download: []
+  refresh: []
+  newFolder: []
+}>()
 </script>
 
 <template>
@@ -7,16 +13,16 @@ const emit = defineEmits<{ connect: [] }>()
     <button class="btn" @click="emit('connect')">
       <span>⚡</span> Connect
     </button>
-    <button class="btn">
+    <button class="btn" @click="emit('upload')">
       <span>⬆</span> Upload
     </button>
-    <button class="btn">
+    <button class="btn" @click="emit('download')">
       <span>⬇</span> Download
     </button>
-    <button class="btn">
+    <button class="btn" @click="emit('refresh')">
       <span>🔄</span> Refresh
     </button>
-    <button class="btn">
+    <button class="btn" @click="emit('newFolder')">
       <span>📁</span> New Folder
     </button>
   </div>
