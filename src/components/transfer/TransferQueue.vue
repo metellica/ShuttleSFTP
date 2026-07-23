@@ -1,10 +1,17 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useTransferStore } from '@/stores/transfer'
 
 const transferStore = useTransferStore()
 
+const totalSpeed = computed(() =>
+  transferStore.tasks
+    .filter((t) => t.status === 'active')
+    .reduce((sum, t) => sum + (t.speed ?? 0), 0)
+)
+
 function formatSpeed(bytesPerSec: number): string {
-  if (bytesPerSec < 1024) return `${bytesPerSec} B/s`
+  if (bytesPerSec < 1024) return `${Math.round(bytesPerSec)} B/s`
   if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`
   return `${(bytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`
 }
@@ -19,6 +26,7 @@ function progressPercent(task: { transferredBytes: number; totalBytes: number })
   <div class="transfer-queue" v-if="transferStore.tasks.length > 0">
     <div class="queue-header">
       <span>Transfers ({{ transferStore.tasks.length }})</span>
+      <span v-if="totalSpeed > 0" class="total-speed">{{ formatSpeed(totalSpeed) }}</span>
       <button class="clear-btn" @click="transferStore.clearCompleted">Clear done</button>
     </div>
     <div class="queue-list">
@@ -27,6 +35,7 @@ function progressPercent(task: { transferredBytes: number; totalBytes: number })
         <span class="task-name">{{ task.sourcePath.split('/').pop() }}</span>
         <span class="task-status" :class="task.status">{{ task.status }}</span>
         <div class="task-progress" v-if="task.status === 'active'">
+          <span class="task-speed">{{ formatSpeed(task.speed ?? 0) }}</span>
           <div class="progress-bar">
             <div class="progress-fill" :style="{ width: progressPercent(task) + '%' }" />
           </div>
@@ -94,7 +103,22 @@ function progressPercent(task: { transferredBytes: number; totalBytes: number })
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 140px;
+  width: 240px;
+}
+
+.task-speed {
+  font-size: 11px;
+  color: #94e2d5;
+  min-width: 70px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.total-speed {
+  color: #94e2d5;
+  font-size: 11px;
+  margin-left: auto;
+  margin-right: 12px;
 }
 
 .progress-bar {

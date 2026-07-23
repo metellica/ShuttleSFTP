@@ -37,6 +37,7 @@ onMounted(async () => {
       transferStore.updateTask(e.payload.taskId, {
         transferredBytes: e.payload.transferredBytes,
         totalBytes: e.payload.totalBytes,
+        speed: e.payload.speed,
       })
     })
   )
