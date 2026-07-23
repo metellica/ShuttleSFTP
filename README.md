@@ -9,10 +9,14 @@ A fast, lightweight, cross-platform SFTP/SCP GUI built with **Tauri 2 + Vue 3 + 
 
 - 🚀 **High Performance** — Async Rust backend powered by `russh` + `tokio`
 - 📁 **Finder-Style Browser** — macOS Finder-like Miller columns with clickable breadcrumb path bar
+- 🗒️ **Details View** — Windows Explorer-style list view (size, permissions, modified time), toggleable
+- 👁️ **File Preview** — Inline text preview pane with copy support
 - 🖱️ **Drag & Drop Upload** — Drag files from your OS file manager to upload
 - ⬇️ **Flexible Download** — Toolbar download, right-click **Download…** / **Save As…** context menu
+- ⭐ **Bookmarks** — Right-click any remote folder to bookmark it (with custom alias), then one-click reconnect straight into that path
 - 🔑 **Flexible Auth** — Password, private key (with passphrase), SSH agent
 - 📋 **SSH Config** — Auto-loads `~/.ssh/config` hosts with fuzzy-search dropdown
+- 💾 **Saved Profiles** — Save connections (optionally with credentials) for quick reuse
 - 🗂️ **Multi-Tab** — Multiple concurrent SFTP sessions in tabs (labeled by SSH alias)
 - 📊 **Transfer Queue** — Live progress, speed, and status for concurrent transfers
 - 📦 **Tiny Binary** — ~10MB app bundle (vs ~150MB for Electron alternatives)
@@ -51,7 +55,7 @@ A fast, lightweight, cross-platform SFTP/SCP GUI built with **Tauri 2 + Vue 3 + 
 npm install
 
 # Run in development mode (hot-reload)
-cargo tauri dev
+cargo tauri dev   # or: npx tauri dev
 ```
 
 ### Build for Production
@@ -97,6 +101,16 @@ ShuttleSFTP/
 4. Browse remote files in Finder-style columns — click a directory to expand it in the next column, click any breadcrumb segment to jump back
 5. **Upload**: Drag files from your desktop/file manager into the app, or use the Upload button
 6. **Download**: Select files (Ctrl+click for multi-select) → click Download, or right-click → **Download…** / **Save As…**
+7. **Bookmark**: Right-click a remote folder → **⭐ Add Bookmark** (alias defaults to the path). Click **⭐ Bookmarks** in the toolbar to see all bookmarks (alias + remote + path) and connect or delete
+
+### Configuration
+
+All settings are stored as plain JSON under `~/.config/shuttle-sftp/` on every platform:
+
+| File | Contents |
+|------|----------|
+| `profiles.json` | Saved connection profiles |
+| `bookmarks.json` | Bookmarked remote paths |
 
 ## CI / Releases
 
@@ -107,7 +121,7 @@ git tag v0.1.0
 git push --tags
 ```
 
-GitHub Actions will produce platform-specific installers as artifacts.
+GitHub Actions builds installers for all platforms and publishes them to a GitHub Release automatically.
 
 ## Roadmap
 
@@ -117,9 +131,10 @@ GitHub Actions will produce platform-specific installers as artifacts.
 - [x] Drag & drop upload
 - [x] Download / Save As via context menu
 - [x] Finder-style column view with breadcrumb navigation
+- [x] Explorer-style details view with file preview
 - [x] Transfer queue with progress events
+- [x] Bookmarks & favorites (one-click connect to a remote path)
 - [ ] SSH agent forwarding
-- [ ] Bookmarks & favorites
 - [ ] Integrated SSH terminal
 - [ ] Transfer resume
 - [ ] File quick-edit (remote)
