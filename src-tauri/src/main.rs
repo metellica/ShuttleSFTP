@@ -31,6 +31,7 @@ fn main() {
             shuttle_sftp::commands::transfer::resume_transfer,
             shuttle_sftp::commands::transfer::resume_all_transfers,
             shuttle_sftp::commands::transfer::clear_finished_transfers,
+            shuttle_sftp::commands::transfer::show_in_folder,
             shuttle_sftp::commands::transfer::list_transfers,
             shuttle_sftp::commands::config::load_ssh_config,
             shuttle_sftp::commands::config::list_profiles,

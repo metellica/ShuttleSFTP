@@ -9,6 +9,7 @@ import {
   resumeAllTransfers,
   cancelAllTransfers,
   cancelTransferGroup,
+  showInFolder,
 } from '@/composables/useTauri'
 import { connectForTransferTask } from '@/composables/useAutoConnect'
 import { ask } from '@tauri-apps/plugin-dialog'
@@ -312,6 +313,88 @@ function taskLabel(task: TransferTask): string {
   if (task.relPath) return task.relPath
   return task.sourcePath.split(/[/\\]/).pop() ?? task.sourcePath
 }
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`
+  return `${(bytes / 1024 ** 3).toFixed(2)} GB`
+}
+
+// Details toggling (task id or group id)
+const detailsFor = ref<string | null>(null)
+
+function toggleDetails(id: string) {
+  detailsFor.value = detailsFor.value === id ? null : id
+}
+
+/** Strip a task's relative path from one of its endpoints to get the root. */
+function stripRel(path: string, relPath: string | undefined): string {
+  const depth = (relPath ?? '').split('/').filter(Boolean).length
+  let p = path
+  for (let i = 0; i < depth; i++) {
+    const idx = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
+    if (idx <= 0) break
+    p = p.slice(0, idx)
+  }
+  return p
+}
+
+/** The local side of a task: dest for downloads, source for uploads. */
+function localPathOf(task: TransferTask): string {
+  return task.direction === 'download' ? task.destPath : task.sourcePath
+}
+
+function groupLocalRoot(group: GroupNode): string | null {
+  const t = group.tasks[0]
+  if (!t) return null
+  return stripRel(localPathOf(t), t.relPath)
+}
+
+function groupRemoteRoot(group: GroupNode): string | null {
+  const t = group.tasks[0]
+  if (!t) return null
+  const remote = group.direction === 'download' ? t.sourcePath : t.destPath
+  return stripRel(remote, t.relPath)
+}
+
+function serverOf(task: TransferTask | undefined): string {
+  if (!task?.host) return ''
+  return `${task.username}@${task.host}`
+}
+
+function taskFrom(task: TransferTask): string {
+  return task.direction === 'download'
+    ? `${serverOf(task)}:${task.sourcePath}`
+    : task.sourcePath
+}
+
+function taskTo(task: TransferTask): string {
+  return task.direction === 'download'
+    ? task.destPath
+    : `${serverOf(task)}:${task.destPath}`
+}
+
+function groupFrom(group: GroupNode): string {
+  const remote = groupRemoteRoot(group) ?? ''
+  const local = groupLocalRoot(group) ?? ''
+  return group.direction === 'download' ? `${serverOf(group.tasks[0])}:${remote}` : local
+}
+
+function groupTo(group: GroupNode): string {
+  const remote = groupRemoteRoot(group) ?? ''
+  const local = groupLocalRoot(group) ?? ''
+  return group.direction === 'download' ? local : `${serverOf(group.tasks[0])}:${remote}`
+}
+
+async function onShowInFolder(path: string | null) {
+  if (!path) return
+  try {
+    await showInFolder(path)
+  } catch (e) {
+    console.error('Show in folder failed:', e)
+  }
+}
 </script>
 
 <template>
@@ -329,32 +412,42 @@ function taskLabel(task: TransferTask): string {
     <div class="queue-list">
       <template v-for="row in rows" :key="row.type === 'task' ? row.task.id : row.group.id">
         <!-- Standalone file task -->
-        <div v-if="row.type === 'task'" class="task-row">
-          <span class="task-icon">{{ row.task.direction === 'upload' ? '⬆' : '⬇' }}</span>
-          <span class="task-name">{{ taskLabel(row.task) }}</span>
-          <span class="task-status" :class="row.task.status">{{ row.task.status }}</span>
-          <div class="task-progress" v-if="row.task.status === 'active' || row.task.status === 'paused'">
-            <span v-if="row.task.status === 'active'" class="task-speed">{{ formatSpeed(row.task.speed ?? 0) }}</span>
-            <div class="progress-bar">
-              <div class="progress-fill" :class="{ paused: row.task.status === 'paused' }" :style="{ width: progressPercent(row.task) + '%' }" />
+        <template v-if="row.type === 'task'">
+          <div class="task-row">
+            <span class="task-icon">{{ row.task.direction === 'upload' ? '⬆' : '⬇' }}</span>
+            <span class="task-name">{{ taskLabel(row.task) }}</span>
+            <span class="task-status" :class="row.task.status">{{ row.task.status }}</span>
+            <div class="task-progress" v-if="row.task.status === 'active' || row.task.status === 'paused'">
+              <span v-if="row.task.status === 'active'" class="task-speed">{{ formatSpeed(row.task.speed ?? 0) }}</span>
+              <div class="progress-bar">
+                <div class="progress-fill" :class="{ paused: row.task.status === 'paused' }" :style="{ width: progressPercent(row.task) + '%' }" />
+              </div>
+              <span class="progress-text">{{ progressPercent(row.task) }}%</span>
             </div>
-            <span class="progress-text">{{ progressPercent(row.task) }}%</span>
+            <span class="task-actions">
+              <button class="act-btn" title="Details" @click="toggleDetails(row.task.id)">ℹ</button>
+              <button class="act-btn" title="Show in local folder" @click="onShowInFolder(localPathOf(row.task))">📂</button>
+              <button
+                v-if="row.task.status === 'active' || row.task.status === 'queued'"
+                class="act-btn" title="Pause" @click="onPause(row.task)"
+              >⏸</button>
+              <button
+                v-if="row.task.status === 'paused' || row.task.status === 'failed'"
+                class="act-btn" :title="row.task.status === 'failed' ? 'Retry' : 'Resume'" @click="onResume(row.task)"
+              >▶</button>
+              <button
+                v-if="row.task.status === 'active' || row.task.status === 'queued' || row.task.status === 'paused'"
+                class="act-btn danger" title="Cancel" @click="onCancel(row.task)"
+              >✕</button>
+            </span>
           </div>
-          <span class="task-actions">
-            <button
-              v-if="row.task.status === 'active' || row.task.status === 'queued'"
-              class="act-btn" title="Pause" @click="onPause(row.task)"
-            >⏸</button>
-            <button
-              v-if="row.task.status === 'paused' || row.task.status === 'failed'"
-              class="act-btn" :title="row.task.status === 'failed' ? 'Retry' : 'Resume'" @click="onResume(row.task)"
-            >▶</button>
-            <button
-              v-if="row.task.status === 'active' || row.task.status === 'queued' || row.task.status === 'paused'"
-              class="act-btn danger" title="Cancel" @click="onCancel(row.task)"
-            >✕</button>
-          </span>
-        </div>
+          <div v-if="detailsFor === row.task.id" class="task-details">
+            <div class="dt-row"><span class="dt-label">From</span><span class="dt-val">{{ taskFrom(row.task) }}</span></div>
+            <div class="dt-row"><span class="dt-label">To</span><span class="dt-val">{{ taskTo(row.task) }}</span></div>
+            <div class="dt-row"><span class="dt-label">Size</span><span class="dt-val">{{ formatSize(row.task.transferredBytes) }} / {{ formatSize(row.task.totalBytes) }} ({{ progressPercent(row.task) }}%)</span></div>
+            <div class="dt-row" v-if="serverOf(row.task)"><span class="dt-label">Server</span><span class="dt-val">{{ serverOf(row.task) }}</span></div>
+          </div>
+        </template>
 
         <!-- Directory transfer group -->
         <template v-else>
@@ -372,38 +465,57 @@ function taskLabel(task: TransferTask): string {
               <span class="progress-text">{{ progressPercent(row.group) }}%</span>
             </div>
             <span class="task-actions" @click.stop>
+              <button class="act-btn" title="Details" @click="toggleDetails(row.group.id)">ℹ</button>
+              <button class="act-btn" title="Open local folder" @click="onShowInFolder(groupLocalRoot(row.group))">📂</button>
               <button v-if="groupCanPause(row.group)" class="act-btn" title="Pause folder" @click="onPauseGroup(row.group)">⏸</button>
               <button v-if="groupCanResume(row.group)" class="act-btn" title="Resume folder" @click="onResumeGroup(row.group)">▶</button>
               <button v-if="groupCanCancel(row.group)" class="act-btn danger" title="Cancel folder" @click="onCancelGroup(row.group)">✕</button>
             </span>
           </div>
+          <div v-if="detailsFor === row.group.id" class="task-details">
+            <div class="dt-row"><span class="dt-label">From</span><span class="dt-val">{{ groupFrom(row.group) }}</span></div>
+            <div class="dt-row"><span class="dt-label">To</span><span class="dt-val">{{ groupTo(row.group) }}</span></div>
+            <div class="dt-row"><span class="dt-label">Size</span><span class="dt-val">{{ formatSize(row.group.transferredBytes) }} / {{ formatSize(row.group.totalBytes) }} ({{ progressPercent(row.group) }}%)</span></div>
+            <div class="dt-row"><span class="dt-label">Files</span><span class="dt-val">{{ row.group.doneCount }} / {{ row.group.tasks.length }} completed</span></div>
+            <div class="dt-row" v-if="serverOf(row.group.tasks[0])"><span class="dt-label">Server</span><span class="dt-val">{{ serverOf(row.group.tasks[0]) }}</span></div>
+          </div>
           <template v-if="expanded.has(row.group.id)">
-            <div v-for="task in row.group.tasks" :key="task.id" class="task-row child-row">
-              <span class="task-icon">{{ task.direction === 'upload' ? '⬆' : '⬇' }}</span>
-              <span class="task-name">{{ taskLabel(task) }}</span>
-              <span class="task-status" :class="task.status">{{ task.status }}</span>
-              <div class="task-progress" v-if="task.status === 'active' || task.status === 'paused'">
-                <span v-if="task.status === 'active'" class="task-speed">{{ formatSpeed(task.speed ?? 0) }}</span>
-                <div class="progress-bar">
-                  <div class="progress-fill" :class="{ paused: task.status === 'paused' }" :style="{ width: progressPercent(task) + '%' }" />
+            <template v-for="task in row.group.tasks" :key="task.id">
+              <div class="task-row child-row">
+                <span class="task-icon">{{ task.direction === 'upload' ? '⬆' : '⬇' }}</span>
+                <span class="task-name">{{ taskLabel(task) }}</span>
+                <span class="task-status" :class="task.status">{{ task.status }}</span>
+                <div class="task-progress" v-if="task.status === 'active' || task.status === 'paused'">
+                  <span v-if="task.status === 'active'" class="task-speed">{{ formatSpeed(task.speed ?? 0) }}</span>
+                  <div class="progress-bar">
+                    <div class="progress-fill" :class="{ paused: task.status === 'paused' }" :style="{ width: progressPercent(task) + '%' }" />
+                  </div>
+                  <span class="progress-text">{{ progressPercent(task) }}%</span>
                 </div>
-                <span class="progress-text">{{ progressPercent(task) }}%</span>
+                <span class="task-actions">
+                  <button class="act-btn" title="Details" @click="toggleDetails(task.id)">ℹ</button>
+                  <button class="act-btn" title="Show in local folder" @click="onShowInFolder(localPathOf(task))">📂</button>
+                  <button
+                    v-if="task.status === 'active' || task.status === 'queued'"
+                    class="act-btn" title="Pause" @click="onPause(task)"
+                  >⏸</button>
+                  <button
+                    v-if="task.status === 'paused' || task.status === 'failed'"
+                    class="act-btn" :title="task.status === 'failed' ? 'Retry' : 'Resume'" @click="onResume(task)"
+                  >▶</button>
+                  <button
+                    v-if="task.status === 'active' || task.status === 'queued' || task.status === 'paused'"
+                    class="act-btn danger" title="Cancel" @click="onCancel(task)"
+                  >✕</button>
+                </span>
               </div>
-              <span class="task-actions">
-                <button
-                  v-if="task.status === 'active' || task.status === 'queued'"
-                  class="act-btn" title="Pause" @click="onPause(task)"
-                >⏸</button>
-                <button
-                  v-if="task.status === 'paused' || task.status === 'failed'"
-                  class="act-btn" :title="task.status === 'failed' ? 'Retry' : 'Resume'" @click="onResume(task)"
-                >▶</button>
-                <button
-                  v-if="task.status === 'active' || task.status === 'queued' || task.status === 'paused'"
-                  class="act-btn danger" title="Cancel" @click="onCancel(task)"
-                >✕</button>
-              </span>
-            </div>
+              <div v-if="detailsFor === task.id" class="task-details child-details">
+                <div class="dt-row"><span class="dt-label">From</span><span class="dt-val">{{ taskFrom(task) }}</span></div>
+                <div class="dt-row"><span class="dt-label">To</span><span class="dt-val">{{ taskTo(task) }}</span></div>
+                <div class="dt-row"><span class="dt-label">Size</span><span class="dt-val">{{ formatSize(task.transferredBytes) }} / {{ formatSize(task.totalBytes) }} ({{ progressPercent(task) }}%)</span></div>
+                <div class="dt-row" v-if="serverOf(task)"><span class="dt-label">Server</span><span class="dt-val">{{ serverOf(task) }}</span></div>
+              </div>
+            </template>
           </template>
         </template>
       </template>
@@ -512,6 +624,34 @@ function taskLabel(task: TransferTask): string {
 
 .child-row {
   padding-left: 40px;
+}
+
+.task-details {
+  padding: 4px 12px 6px 32px;
+  background: #11111b;
+  font-size: 11px;
+}
+
+.child-details {
+  padding-left: 56px;
+}
+
+.dt-row {
+  display: flex;
+  gap: 8px;
+  line-height: 1.6;
+}
+
+.dt-label {
+  color: #6c7086;
+  min-width: 44px;
+  flex-shrink: 0;
+}
+
+.dt-val {
+  color: #cdd6f4;
+  word-break: break-all;
+  user-select: text;
 }
 
 .act-btn {

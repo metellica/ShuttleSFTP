@@ -60,6 +60,9 @@ export const resumeAllTransfers = () =>
 export const clearFinishedTransfers = () =>
   invoke<void>('clear_finished_transfers')
 
+export const showInFolder = (path: string) =>
+  invoke<void>('show_in_folder', { path })
+
 export const listTransfers = () =>
   invoke<TransferTask[]>('list_transfers')
 

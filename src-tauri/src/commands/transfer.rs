@@ -443,6 +443,56 @@ pub async fn resume_all_transfers(
     Ok(resumed)
 }
 
+/// Reveal a local path in the system file manager: directories open
+/// directly, files are selected in their containing folder.
+#[tauri::command]
+pub async fn show_in_folder(path: String) -> AppResult<()> {
+    let p = PathBuf::from(&path);
+    let target = if p.exists() {
+        p
+    } else {
+        // e.g. file already deleted: fall back to the containing folder
+        p.parent()
+            .filter(|d| d.exists())
+            .map(|d| d.to_path_buf())
+            .ok_or_else(|| AppError::IoError(format!("Path not found: {}", path)))?
+    };
+
+    #[cfg(target_os = "windows")]
+    {
+        let mut cmd = std::process::Command::new("explorer");
+        if target.is_dir() {
+            cmd.arg(&target);
+        } else {
+            cmd.arg("/select,").arg(&target);
+        }
+        // explorer.exe reports a nonzero exit code even on success
+        cmd.spawn().map_err(|e| AppError::IoError(e.to_string()))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut cmd = std::process::Command::new("open");
+        if !target.is_dir() {
+            cmd.arg("-R");
+        }
+        cmd.arg(&target);
+        cmd.spawn().map_err(|e| AppError::IoError(e.to_string()))?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let dir = if target.is_dir() {
+            target.clone()
+        } else {
+            target.parent().map(|d| d.to_path_buf()).unwrap_or(target)
+        };
+        std::process::Command::new("xdg-open")
+            .arg(&dir)
+            .spawn()
+            .map_err(|e| AppError::IoError(e.to_string()))?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn clear_finished_transfers(
     transfer_engine: State<'_, TransferEngine>,
