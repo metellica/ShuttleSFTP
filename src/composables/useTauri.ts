@@ -34,10 +34,31 @@ export const downloadFiles = (sessionId: string, remotePaths: string[], localDir
   invoke<string[]>('download', { sessionId, remotePaths, localDir })
 
 export const downloadFileAs = (sessionId: string, remotePath: string, localPath: string) =>
-  invoke<string>('download_as', { sessionId, remotePath, localPath })
+  invoke<string[]>('download_as', { sessionId, remotePath, localPath })
 
-export const cancelTransfer = (taskId: string) =>
-  invoke<void>('cancel_transfer', { taskId })
+export const cancelTransfer = (taskId: string, deleteLocal = false) =>
+  invoke<void>('cancel_transfer', { taskId, deleteLocal })
+
+export const cancelAllTransfers = (deleteLocal = false) =>
+  invoke<void>('cancel_all_transfers', { deleteLocal })
+
+export const cancelTransferGroup = (groupId: string, deleteLocal = false) =>
+  invoke<void>('cancel_transfer_group', { groupId, deleteLocal })
+
+export const pauseTransfer = (taskId: string) =>
+  invoke<void>('pause_transfer', { taskId })
+
+export const pauseAllTransfers = () =>
+  invoke<string[]>('pause_all_transfers')
+
+export const resumeTransfer = (taskId: string, sessionId?: string) =>
+  invoke<void>('resume_transfer', { taskId, sessionId: sessionId ?? null })
+
+export const resumeAllTransfers = () =>
+  invoke<string[]>('resume_all_transfers')
+
+export const clearFinishedTransfers = () =>
+  invoke<void>('clear_finished_transfers')
 
 export const listTransfers = () =>
   invoke<TransferTask[]>('list_transfers')

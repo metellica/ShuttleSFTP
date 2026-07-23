@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { listTransfers } from '@/composables/useTauri'
+import { listTransfers, clearFinishedTransfers } from '@/composables/useTauri'
 import type { TransferTask } from '@/types/transfer'
 
 export const useTransferStore = defineStore('transfer', () => {
@@ -19,10 +19,16 @@ export const useTransferStore = defineStore('transfer', () => {
     tasks.value = tasks.value.filter((t) => t.id !== taskId)
   }
 
-  function clearCompleted() {
+  async function clearCompleted() {
     tasks.value = tasks.value.filter(
       (t) => t.status !== 'completed' && t.status !== 'cancelled'
     )
+    // Also drop them from the backend so they don't reappear after restart
+    try {
+      await clearFinishedTransfers()
+    } catch (e) {
+      console.error('Cannot clear finished transfers:', e)
+    }
   }
 
   /** Pull the authoritative task list from the backend. */

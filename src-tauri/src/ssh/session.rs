@@ -73,4 +73,21 @@ impl SessionManager {
             .cloned()
             .ok_or_else(|| AppError::SessionNotFound(session_id.to_string()))
     }
+
+    /// Find any live session connected to the given host as the given user.
+    /// Used to rebind persisted transfers to a new session after a restart.
+    pub async fn find_session_for(
+        &self,
+        host: &str,
+        username: &str,
+    ) -> Option<(String, Arc<Mutex<SshSession>>)> {
+        let sessions = self.sessions.lock().await;
+        for (id, session) in sessions.iter() {
+            let params = { session.lock().await.params.clone() };
+            if params.host == host && params.username == username {
+                return Some((id.clone(), session.clone()));
+            }
+        }
+        None
+    }
 }

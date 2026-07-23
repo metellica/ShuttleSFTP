@@ -3,6 +3,7 @@ const emit = defineEmits<{
   connect: []
   bookmarks: []
   upload: []
+  uploadFolder: []
   download: []
   refresh: []
   newFolder: []
@@ -19,6 +20,9 @@ const emit = defineEmits<{
     </button>
     <button class="btn" @click="emit('upload')">
       <span>⬆</span> Upload
+    </button>
+    <button class="btn" @click="emit('uploadFolder')">
+      <span>⬆</span> Upload Folder
     </button>
     <button class="btn" @click="emit('download')">
       <span>⬇</span> Download

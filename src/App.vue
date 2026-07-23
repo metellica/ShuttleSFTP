@@ -32,6 +32,9 @@ onMounted(async () => {
     showConnectDialog.value = true
   }
 
+  // Restore persisted transfers (interrupted ones come back as paused)
+  transferStore.syncTasks().catch((e) => console.error('Cannot load transfers:', e))
+
   unlisteners.push(
     await listen<TransferProgress>('transfer:progress', (e) => {
       transferStore.updateTask(e.payload.taskId, {
@@ -122,6 +125,26 @@ async function onUpload() {
   }
 }
 
+async function onUploadFolder() {
+  const tab = tabsStore.activeTab
+  if (!tab?.sessionId) return
+
+  const selected = await open({
+    multiple: true,
+    directory: true,
+    title: 'Select folders to upload',
+  })
+  if (!selected) return
+
+  const paths = Array.isArray(selected) ? selected : [selected]
+  try {
+    await uploadFiles(tab.sessionId, paths, tab.currentPath)
+    await transferStore.syncTasks()
+  } catch (e) {
+    console.error('Upload folder failed:', e)
+  }
+}
+
 async function onDownload() {
   const tab = tabsStore.activeTab
   if (!tab?.sessionId) return
@@ -174,6 +197,7 @@ async function onNewFolder() {
       @connect="showConnectDialog = true"
       @bookmarks="showBookmarksDialog = true"
       @upload="onUpload"
+      @upload-folder="onUploadFolder"
       @download="onDownload"
       @refresh="onRefresh"
       @new-folder="onNewFolder"

@@ -318,7 +318,7 @@ async function copyAll() {
 async function ctxDownload() {
   hideCtxMenu()
   const sid = sessionId.value
-  const targets = selectedFiles.value.filter((f) => !f.isDir).map((f) => f.path)
+  const targets = selectedFiles.value.map((f) => f.path)
   if (!sid || targets.length === 0) return
 
   const dir = await open({ directory: true, title: 'Choose download location' })
@@ -336,9 +336,12 @@ async function ctxSaveAs() {
   hideCtxMenu()
   const entry = ctxMenu.value.entry
   const sid = sessionId.value
-  if (!sid || !entry || entry.isDir) return
+  if (!sid || !entry) return
 
-  const target = await save({ defaultPath: entry.name, title: 'Save As' })
+  const target = await save({
+    defaultPath: entry.name,
+    title: entry.isDir ? 'Save Folder As' : 'Save As',
+  })
   if (!target) return
 
   try {
@@ -572,7 +575,7 @@ watch(viewMode, () => {
       <button class="ctx-item" @click="ctxDownload">⬇ Download…</button>
       <button
         class="ctx-item"
-        :disabled="!ctxMenu.entry || ctxMenu.entry.isDir"
+        :disabled="!ctxMenu.entry"
         @click="ctxSaveAs"
       >
         💾 Save As…

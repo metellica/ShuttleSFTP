@@ -1,9 +1,207 @@
-use tauri::State;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use crate::error::AppResult;
-use crate::ssh::session::SessionManager;
+use tauri::State;
+use tokio::sync::Mutex;
+
+use crate::error::{AppError, AppResult};
+use crate::ssh::session::{SessionManager, SshSession};
 use crate::transfer::engine::TransferEngine;
-use crate::transfer::progress::TransferTask;
+use crate::transfer::progress::{TaskGroup, TransferStatus, TransferTask};
+
+/// Walk a local directory tree. Returns (dirs, files) as '/'-separated
+/// paths relative to `root`, dirs sorted shallow-first.
+async fn walk_local_dir(root: &Path) -> AppResult<(Vec<String>, Vec<String>)> {
+    let mut dirs = Vec::new();
+    let mut files = Vec::new();
+    let mut stack: Vec<(PathBuf, String)> = vec![(root.to_path_buf(), String::new())];
+    while let Some((dir, rel)) = stack.pop() {
+        let mut rd = tokio::fs::read_dir(&dir)
+            .await
+            .map_err(|e| AppError::TransferError(format!("Cannot read local dir: {}", e)))?;
+        while let Some(entry) = rd
+            .next_entry()
+            .await
+            .map_err(|e| AppError::TransferError(format!("Cannot read local dir: {}", e)))?
+        {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let child_rel = if rel.is_empty() {
+                name
+            } else {
+                format!("{}/{}", rel, name)
+            };
+            let ft = entry
+                .file_type()
+                .await
+                .map_err(|e| AppError::TransferError(format!("Cannot stat local entry: {}", e)))?;
+            if ft.is_dir() {
+                dirs.push(child_rel.clone());
+                stack.push((entry.path(), child_rel));
+            } else if ft.is_file() {
+                files.push(child_rel);
+            }
+            // symlinks and special files are skipped
+        }
+    }
+    dirs.sort();
+    files.sort();
+    Ok((dirs, files))
+}
+
+/// Walk a remote directory tree. Returns (dirs, files) as '/'-separated
+/// paths relative to `root`, dirs sorted shallow-first.
+async fn walk_remote_dir(
+    session: &Arc<Mutex<SshSession>>,
+    root: &str,
+) -> AppResult<(Vec<String>, Vec<String>)> {
+    let mut dirs = Vec::new();
+    let mut files = Vec::new();
+    let mut stack: Vec<(String, String)> = vec![(root.to_string(), String::new())];
+    while let Some((path, rel)) = stack.pop() {
+        let entries = {
+            let sess = session.lock().await;
+            sess.sftp.list_dir(&path).await?
+        };
+        for entry in entries {
+            let child_rel = if rel.is_empty() {
+                entry.name
+            } else {
+                format!("{}/{}", rel, entry.name)
+            };
+            if entry.is_dir {
+                dirs.push(child_rel.clone());
+                stack.push((entry.path, child_rel));
+            } else {
+                files.push(child_rel);
+            }
+        }
+    }
+    dirs.sort();
+    files.sort();
+    Ok((dirs, files))
+}
+
+fn rel_to_local(root: &Path, rel: &str) -> PathBuf {
+    let mut p = root.to_path_buf();
+    for part in rel.split('/') {
+        p.push(part);
+    }
+    p
+}
+
+/// Queue every file of a local directory as one transfer group,
+/// creating the remote directory structure first.
+async fn queue_dir_upload(
+    app: &tauri::AppHandle,
+    transfer_engine: &TransferEngine,
+    session: Arc<Mutex<SshSession>>,
+    session_id: &str,
+    local_dir: &Path,
+    remote_parent: &str,
+) -> AppResult<Vec<String>> {
+    let dir_name = local_dir
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let remote_root = format!("{}/{}", remote_parent.trim_end_matches('/'), dir_name);
+    let (dirs, files) = walk_local_dir(local_dir).await?;
+
+    {
+        let sess = session.lock().await;
+        let sftp = sess.sftp.sftp_session();
+        // Ignore "already exists" failures
+        let _ = sftp.create_dir(&remote_root).await;
+        for d in &dirs {
+            let _ = sftp.create_dir(format!("{}/{}", remote_root, d)).await;
+        }
+    }
+
+    let group_id = uuid::Uuid::new_v4().to_string();
+    let mut task_ids = Vec::new();
+    for rel in files {
+        let local = rel_to_local(local_dir, &rel);
+        let remote = format!("{}/{}", remote_root, rel);
+        let group = TaskGroup {
+            id: group_id.clone(),
+            name: dir_name.clone(),
+            rel_path: rel,
+        };
+        let id = transfer_engine
+            .queue_upload(
+                app.clone(),
+                session.clone(),
+                session_id,
+                &local.to_string_lossy(),
+                &remote,
+                Some(group),
+            )
+            .await?;
+        task_ids.push(id);
+    }
+    Ok(task_ids)
+}
+
+/// Queue every file of a remote directory as one transfer group,
+/// creating the local directory structure first.
+async fn queue_dir_download(
+    app: &tauri::AppHandle,
+    transfer_engine: &TransferEngine,
+    session: Arc<Mutex<SshSession>>,
+    session_id: &str,
+    remote_dir: &str,
+    local_root: &Path,
+) -> AppResult<Vec<String>> {
+    let dir_name = local_root
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let (dirs, files) = walk_remote_dir(&session, remote_dir).await?;
+
+    tokio::fs::create_dir_all(local_root)
+        .await
+        .map_err(|e| AppError::TransferError(format!("Cannot create local dir: {}", e)))?;
+    for d in &dirs {
+        tokio::fs::create_dir_all(rel_to_local(local_root, d))
+            .await
+            .map_err(|e| AppError::TransferError(format!("Cannot create local dir: {}", e)))?;
+    }
+
+    let group_id = uuid::Uuid::new_v4().to_string();
+    let mut task_ids = Vec::new();
+    for rel in files {
+        let remote = format!("{}/{}", remote_dir.trim_end_matches('/'), rel);
+        let local = rel_to_local(local_root, &rel);
+        let group = TaskGroup {
+            id: group_id.clone(),
+            name: dir_name.clone(),
+            rel_path: rel,
+        };
+        let id = transfer_engine
+            .queue_download(
+                app.clone(),
+                session.clone(),
+                session_id,
+                &remote,
+                &local.to_string_lossy(),
+                Some(group),
+            )
+            .await?;
+        task_ids.push(id);
+    }
+    Ok(task_ids)
+}
+
+async fn is_remote_dir(session: &Arc<Mutex<SshSession>>, path: &str) -> bool {
+    let sess = session.lock().await;
+    sess.sftp
+        .sftp_session()
+        .metadata(path)
+        .await
+        .map(|m| m.is_dir())
+        .unwrap_or(false)
+}
 
 #[tauri::command]
 pub async fn upload(
@@ -16,16 +214,31 @@ pub async fn upload(
 ) -> AppResult<Vec<String>> {
     let mut task_ids = Vec::new();
     for local_path in &local_paths {
-        let filename = std::path::Path::new(local_path)
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy();
-        let remote_path = format!("{}/{}", remote_dir.trim_end_matches('/'), filename);
         let session = session_manager.get_session(&session_id).await?;
-        let task_id = transfer_engine
-            .queue_upload(app.clone(), session, &session_id, local_path, &remote_path)
+        let path = Path::new(local_path);
+        let is_dir = tokio::fs::metadata(path)
+            .await
+            .map(|m| m.is_dir())
+            .unwrap_or(false);
+        if is_dir {
+            let ids = queue_dir_upload(
+                &app,
+                transfer_engine.inner(),
+                session,
+                &session_id,
+                path,
+                &remote_dir,
+            )
             .await?;
-        task_ids.push(task_id);
+            task_ids.extend(ids);
+        } else {
+            let filename = path.file_name().unwrap_or_default().to_string_lossy();
+            let remote_path = format!("{}/{}", remote_dir.trim_end_matches('/'), filename);
+            let task_id = transfer_engine
+                .queue_upload(app.clone(), session, &session_id, local_path, &remote_path, None)
+                .await?;
+            task_ids.push(task_id);
+        }
     }
     Ok(task_ids)
 }
@@ -45,20 +258,37 @@ pub async fn download(
             .rsplit('/')
             .next()
             .unwrap_or("file");
-        let local_path = std::path::Path::new(&local_dir)
-            .join(filename)
-            .to_string_lossy()
-            .to_string();
+        let local_path = Path::new(&local_dir).join(filename);
         let session = session_manager.get_session(&session_id).await?;
-        let task_id = transfer_engine
-            .queue_download(app.clone(), session, &session_id, remote_path, &local_path)
+        if is_remote_dir(&session, remote_path).await {
+            let ids = queue_dir_download(
+                &app,
+                transfer_engine.inner(),
+                session,
+                &session_id,
+                remote_path,
+                &local_path,
+            )
             .await?;
-        task_ids.push(task_id);
+            task_ids.extend(ids);
+        } else {
+            let task_id = transfer_engine
+                .queue_download(
+                    app.clone(),
+                    session,
+                    &session_id,
+                    remote_path,
+                    &local_path.to_string_lossy(),
+                    None,
+                )
+                .await?;
+            task_ids.push(task_id);
+        }
     }
     Ok(task_ids)
 }
 
-/// Download a single remote file to an exact local path (Save As).
+/// Download a single remote file or directory to an exact local path (Save As).
 #[tauri::command]
 pub async fn download_as(
     session_id: String,
@@ -67,19 +297,157 @@ pub async fn download_as(
     app: tauri::AppHandle,
     session_manager: State<'_, SessionManager>,
     transfer_engine: State<'_, TransferEngine>,
-) -> AppResult<String> {
+) -> AppResult<Vec<String>> {
     let session = session_manager.get_session(&session_id).await?;
-    transfer_engine
-        .queue_download(app, session, &session_id, &remote_path, &local_path)
+    if is_remote_dir(&session, &remote_path).await {
+        queue_dir_download(
+            &app,
+            transfer_engine.inner(),
+            session,
+            &session_id,
+            &remote_path,
+            Path::new(&local_path),
+        )
         .await
+    } else {
+        let task_id = transfer_engine
+            .queue_download(app, session, &session_id, &remote_path, &local_path, None)
+            .await?;
+        Ok(vec![task_id])
+    }
 }
 
 #[tauri::command]
 pub async fn cancel_transfer(
     task_id: String,
+    delete_local: Option<bool>,
+    app: tauri::AppHandle,
     transfer_engine: State<'_, TransferEngine>,
 ) -> AppResult<()> {
-    transfer_engine.cancel(&task_id).await
+    transfer_engine
+        .cancel(&app, &task_id, delete_local.unwrap_or(false))
+        .await
+}
+
+#[tauri::command]
+pub async fn cancel_all_transfers(
+    delete_local: Option<bool>,
+    app: tauri::AppHandle,
+    transfer_engine: State<'_, TransferEngine>,
+) -> AppResult<()> {
+    transfer_engine
+        .cancel_all(&app, delete_local.unwrap_or(false))
+        .await
+}
+
+/// Cancel a directory transfer group. For downloads, `delete_local`
+/// removes the whole local root directory of the group.
+#[tauri::command]
+pub async fn cancel_transfer_group(
+    group_id: String,
+    delete_local: Option<bool>,
+    app: tauri::AppHandle,
+    transfer_engine: State<'_, TransferEngine>,
+) -> AppResult<()> {
+    transfer_engine
+        .cancel_group(&app, &group_id, delete_local.unwrap_or(false))
+        .await
+}
+
+#[tauri::command]
+pub async fn pause_transfer(
+    task_id: String,
+    app: tauri::AppHandle,
+    transfer_engine: State<'_, TransferEngine>,
+) -> AppResult<()> {
+    transfer_engine.pause(&app, &task_id).await
+}
+
+#[tauri::command]
+pub async fn pause_all_transfers(
+    app: tauri::AppHandle,
+    transfer_engine: State<'_, TransferEngine>,
+) -> AppResult<Vec<String>> {
+    transfer_engine.pause_all(&app).await
+}
+
+/// Find a live session to run this task on: prefer its original session,
+/// otherwise any session connected to the same host as the same user.
+async fn resolve_session_for_task(
+    session_manager: &SessionManager,
+    task: &TransferTask,
+) -> AppResult<(String, Arc<Mutex<SshSession>>)> {
+    if let Ok(session) = session_manager.get_session(&task.session_id).await {
+        return Ok((task.session_id.clone(), session));
+    }
+    session_manager
+        .find_session_for(&task.host, &task.username)
+        .await
+        .ok_or_else(|| {
+            AppError::SessionNotFound(format!(
+                "No active session for {}@{}; connect first, then resume",
+                task.username, task.host
+            ))
+        })
+}
+
+/// Resume a paused/failed transfer. If `session_id` is given, run it on that
+/// session; otherwise rebind to the original or a matching live session.
+#[tauri::command]
+pub async fn resume_transfer(
+    task_id: String,
+    session_id: Option<String>,
+    app: tauri::AppHandle,
+    session_manager: State<'_, SessionManager>,
+    transfer_engine: State<'_, TransferEngine>,
+) -> AppResult<()> {
+    let task = transfer_engine
+        .get_task(&task_id)
+        .await
+        .ok_or_else(|| AppError::TransferError(format!("Task not found: {}", task_id)))?;
+    let (sid, session) = match session_id {
+        Some(sid) => {
+            let session = session_manager.get_session(&sid).await?;
+            (sid, session)
+        }
+        None => resolve_session_for_task(session_manager.inner(), &task).await?,
+    };
+    transfer_engine.resume(app, &task_id, session, &sid).await
+}
+
+/// Resume all paused transfers that can be bound to a live session.
+/// Returns the ids of the transfers that were resumed.
+#[tauri::command]
+pub async fn resume_all_transfers(
+    app: tauri::AppHandle,
+    session_manager: State<'_, SessionManager>,
+    transfer_engine: State<'_, TransferEngine>,
+) -> AppResult<Vec<String>> {
+    let mut resumed = Vec::new();
+    for task in transfer_engine.list_tasks().await {
+        if task.status != TransferStatus::Paused {
+            continue;
+        }
+        let Ok((sid, session)) = resolve_session_for_task(session_manager.inner(), &task).await
+        else {
+            continue;
+        };
+        if transfer_engine
+            .resume(app.clone(), &task.id, session, &sid)
+            .await
+            .is_ok()
+        {
+            resumed.push(task.id);
+        }
+    }
+    Ok(resumed)
+}
+
+#[tauri::command]
+pub async fn clear_finished_transfers(
+    transfer_engine: State<'_, TransferEngine>,
+) -> AppResult<()> {
+    transfer_engine.clear_finished().await
 }
 
 #[tauri::command]
