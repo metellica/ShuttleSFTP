@@ -11,14 +11,18 @@ A fast, lightweight, cross-platform SFTP/SCP GUI built with **Tauri 2 + Vue 3 + 
 - 📁 **Finder-Style Browser** — macOS Finder-like Miller columns with clickable breadcrumb path bar
 - 🗒️ **Details View** — Windows Explorer-style list view (size, permissions, modified time), toggleable
 - 👁️ **File Preview** — Inline text preview pane with copy support
-- 🖱️ **Drag & Drop Upload** — Drag files from your OS file manager to upload
+- 🖱️ **Drag & Drop Upload** — Drag files or folders from your OS file manager to upload
 - ⬇️ **Flexible Download** — Toolbar download, right-click **Download…** / **Save As…** context menu
+- 🗂️ **Directory Transfers** — Recursive folder upload/download/save-as, shown as an expandable tree in the queue
+- ⏯️ **Pause / Resume / Cancel** — Per file, per folder, or all at once; resume continues from the transferred offset
+- 🔁 **Resume After Restart** — Interrupted transfers persist and come back as paused; resume auto-reconnects using saved credentials and opens the matching tab
+- 🧹 **Safe Cancel** — Cancelling a download asks whether to delete the partial local file (or the whole folder for directory downloads)
 - ⭐ **Bookmarks** — Right-click any remote folder to bookmark it (with custom alias), then one-click reconnect straight into that path
 - 🔑 **Flexible Auth** — Password, private key (with passphrase), SSH agent
 - 📋 **SSH Config** — Auto-loads `~/.ssh/config` hosts with fuzzy-search dropdown
 - 💾 **Saved Profiles** — Save connections (optionally with credentials) for quick reuse
 - 🗂️ **Multi-Tab** — Multiple concurrent SFTP sessions in tabs (labeled by SSH alias)
-- 📊 **Transfer Queue** — Live progress, speed, and status for concurrent transfers
+- 📊 **Transfer Queue** — Live per-transfer and total speed, progress, detail view (from/to/size), and open-in-local-folder
 - 📦 **Tiny Binary** — ~10MB app bundle (vs ~150MB for Electron alternatives)
 - 🖥️ **Cross-Platform** — Native on Windows, macOS, and Linux
 
@@ -99,9 +103,10 @@ ShuttleSFTP/
 2. Click **+** or **Connect** to open a new session
 3. Type in the Host field to fuzzy-search your SSH config hosts, or enter connection details manually
 4. Browse remote files in Finder-style columns — click a directory to expand it in the next column, click any breadcrumb segment to jump back
-5. **Upload**: Drag files from your desktop/file manager into the app, or use the Upload button
-6. **Download**: Select files (Ctrl+click for multi-select) → click Download, or right-click → **Download…** / **Save As…**
+5. **Upload**: Drag files or folders from your desktop/file manager into the app, or use the **Upload** / **Upload Folder** buttons
+6. **Download**: Select files or folders (Ctrl+click for multi-select) → click Download, or right-click → **Download…** / **Save As…**
 7. **Bookmark**: Right-click a remote folder → **⭐ Add Bookmark** (alias defaults to the path). Click **⭐ Bookmarks** in the toolbar to see all bookmarks (alias + remote + path) and connect or delete
+8. **Transfers**: The queue at the bottom shows per-file and folder-level progress with live speed. Use ⏸ / ▶ / ✕ on each row (or the header buttons for all), ℹ for details (from/to/size/server), and 📂 to reveal the local file. Interrupted transfers reappear as paused after a restart — ▶ resumes from the last byte, reconnecting automatically when credentials are saved
 
 ### Configuration
 
@@ -111,6 +116,7 @@ All settings are stored as plain JSON under `~/.config/shuttle-sftp/` on every p
 |------|----------|
 | `profiles.json` | Saved connection profiles |
 | `bookmarks.json` | Bookmarked remote paths |
+| `transfers.json` | Transfer queue state (enables resume after restart) |
 
 ## CI / Releases
 
@@ -134,9 +140,11 @@ GitHub Actions builds installers for all platforms and publishes them to a GitHu
 - [x] Explorer-style details view with file preview
 - [x] Transfer queue with progress events
 - [x] Bookmarks & favorites (one-click connect to a remote path)
+- [x] Directory upload/download with tree view in the queue
+- [x] Pause/resume/cancel transfers (per file, per folder, all)
+- [x] Transfer resume (offset continuation, also after app restart)
 - [ ] SSH agent forwarding
 - [ ] Integrated SSH terminal
-- [ ] Transfer resume
 - [ ] File quick-edit (remote)
 - [ ] Proxy support (SOCKS5/HTTP)
 - [ ] i18n (English, 中文)
