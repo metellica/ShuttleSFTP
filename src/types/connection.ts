@@ -42,3 +42,19 @@ export interface SshHostEntry {
   user: string | null
   identityFile: string | null
 }
+
+export interface Bookmark {
+  id: string
+  alias: string
+  host: string
+  port: number
+  username: string
+  authMethod: 'password' | 'key' | 'agent'
+  privateKeyPath?: string
+  /** Present only when captured from a password connection. */
+  password?: string
+  /** Present only when captured from a key connection with passphrase. */
+  passphrase?: string
+  /** Remote directory this bookmark opens. */
+  path: string
+}

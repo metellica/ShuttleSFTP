@@ -1,6 +1,7 @@
 <script setup lang="ts">
 const emit = defineEmits<{
   connect: []
+  bookmarks: []
   upload: []
   download: []
   refresh: []
@@ -12,6 +13,9 @@ const emit = defineEmits<{
   <div class="toolbar">
     <button class="btn" @click="emit('connect')">
       <span>⚡</span> Connect
+    </button>
+    <button class="btn" @click="emit('bookmarks')">
+      <span>⭐</span> Bookmarks
     </button>
     <button class="btn" @click="emit('upload')">
       <span>⬆</span> Upload

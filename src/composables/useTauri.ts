@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { ConnectParams, SshHostEntry, ConnectionProfile } from '@/types/connection'
+import type { ConnectParams, SshHostEntry, ConnectionProfile, Bookmark } from '@/types/connection'
 import type { FileEntry, FilePreview } from '@/types/filesystem'
 import type { TransferTask } from '@/types/transfer'
 
@@ -54,3 +54,13 @@ export const saveProfile = (profile: ConnectionProfile) =>
 
 export const deleteProfile = (profileId: string) =>
   invoke<void>('delete_profile', { profileId })
+
+// Bookmarks
+export const listBookmarks = () =>
+  invoke<Bookmark[]>('list_bookmarks')
+
+export const saveBookmark = (bookmark: Bookmark) =>
+  invoke<void>('save_bookmark', { bookmark })
+
+export const deleteBookmark = (bookmarkId: string) =>
+  invoke<void>('delete_bookmark', { bookmarkId })

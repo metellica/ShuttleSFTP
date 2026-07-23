@@ -10,7 +10,7 @@ import type { SshHostEntry, ConnectParams, ConnectionProfile } from '@/types/con
 
 const emit = defineEmits<{
   close: []
-  connected: [sessionId: string, label: string]
+  connected: [sessionId: string, label: string, params: ConnectParams]
 }>()
 
 /** Unified dropdown item: saved profile or SSH config host. */
@@ -209,7 +209,7 @@ async function doConnect() {
     }
     // Tab label: alias name > ssh config alias > host/IP
     const label = aliasName.value.trim() || selectedAlias.value || host.value
-    emit('connected', sessionId, `${username.value}@${label}`)
+    emit('connected', sessionId, `${username.value}@${label}`, params)
   } catch (e: any) {
     error.value = e?.toString() || 'Connection failed'
   } finally {

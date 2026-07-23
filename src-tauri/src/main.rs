@@ -29,6 +29,9 @@ fn main() {
             shuttle_sftp::commands::config::list_profiles,
             shuttle_sftp::commands::config::save_profile,
             shuttle_sftp::commands::config::delete_profile,
+            shuttle_sftp::commands::config::list_bookmarks,
+            shuttle_sftp::commands::config::save_bookmark,
+            shuttle_sftp::commands::config::delete_bookmark,
         ])
         .run(tauri::generate_context!())
         .expect("error while running ShuttleSFTP");

@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import type { ConnectParams } from '@/types/connection'
 
 export interface Tab {
   id: string
@@ -7,6 +8,8 @@ export interface Tab {
   label: string
   status: 'disconnected' | 'connecting' | 'connected' | 'error'
   currentPath: string
+  /** Params used to establish the session; needed for bookmarking. */
+  connectParams: ConnectParams | null
 }
 
 export const useTabsStore = defineStore('tabs', () => {
@@ -25,6 +28,7 @@ export const useTabsStore = defineStore('tabs', () => {
       label: 'New Connection',
       status: 'disconnected',
       currentPath: '/',
+      connectParams: null,
     }
     tabs.value.push(tab)
     activeTabId.value = id

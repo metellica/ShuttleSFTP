@@ -25,11 +25,7 @@ pub struct ConnectionProfile {
 
 /// Get the app config directory for storing profiles.
 fn profiles_path() -> PathBuf {
-    let config_dir = dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("shuttle-sftp");
-    std::fs::create_dir_all(&config_dir).ok();
-    config_dir.join("profiles.json")
+    super::app_config_dir().join("profiles.json")
 }
 
 /// Load saved profiles.

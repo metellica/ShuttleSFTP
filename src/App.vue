@@ -3,6 +3,7 @@ import { useTabsStore } from '@/stores/tabs'
 import TabBar from '@/components/layout/TabBar.vue'
 import Toolbar from '@/components/layout/Toolbar.vue'
 import ConnectDialog from '@/components/connection/ConnectDialog.vue'
+import BookmarksDialog from '@/components/connection/BookmarksDialog.vue'
 import RemotePanel from '@/components/browser/RemotePanel.vue'
 import TransferQueue from '@/components/transfer/TransferQueue.vue'
 import { ref, onMounted, onUnmounted } from 'vue'
@@ -11,10 +12,12 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { uploadFiles, downloadFiles, mkDir } from '@/composables/useTauri'
 import { useTransferStore } from '@/stores/transfer'
 import type { TransferProgress, TransferTask } from '@/types/transfer'
+import type { ConnectParams } from '@/types/connection'
 
 const tabsStore = useTabsStore()
 const transferStore = useTransferStore()
 const showConnectDialog = ref(false)
+const showBookmarksDialog = ref(false)
 const remotePanelRef = ref<InstanceType<typeof RemotePanel> | null>(null)
 const unlisteners: UnlistenFn[] = []
 
@@ -64,16 +67,38 @@ function onNewTab() {
   showConnectDialog.value = true
 }
 
-function onConnected(sessionId: string, label: string) {
+function onConnected(sessionId: string, label: string, params: ConnectParams) {
   if (tabsStore.activeTab) {
     tabsStore.updateTab(tabsStore.activeTab.id, {
       sessionId,
       label,
       status: 'connected',
       currentPath: '/',
+      connectParams: params,
     })
   }
   showConnectDialog.value = false
+}
+
+function onBookmarkConnected(
+  sessionId: string,
+  label: string,
+  path: string,
+  params: ConnectParams
+) {
+  // Reuse the active tab if it's idle, otherwise open a new one
+  const tab =
+    tabsStore.activeTab && tabsStore.activeTab.status === 'disconnected'
+      ? tabsStore.activeTab
+      : tabsStore.addTab()
+  tabsStore.updateTab(tab.id, {
+    sessionId,
+    label,
+    status: 'connected',
+    currentPath: path,
+    connectParams: params,
+  })
+  showBookmarksDialog.value = false
 }
 
 async function onUpload() {
@@ -146,6 +171,7 @@ async function onNewFolder() {
     <TabBar @new-tab="onNewTab" />
     <Toolbar
       @connect="showConnectDialog = true"
+      @bookmarks="showBookmarksDialog = true"
       @upload="onUpload"
       @download="onDownload"
       @refresh="onRefresh"
@@ -162,6 +188,11 @@ async function onNewFolder() {
       v-if="showConnectDialog"
       @close="showConnectDialog = false"
       @connected="onConnected"
+    />
+    <BookmarksDialog
+      v-if="showBookmarksDialog"
+      @close="showBookmarksDialog = false"
+      @connected="onBookmarkConnected"
     />
   </div>
 </template>

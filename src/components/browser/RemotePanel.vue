@@ -4,8 +4,9 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { useTabsStore } from '@/stores/tabs'
 import { useTransferStore } from '@/stores/transfer'
-import { listDir, uploadFiles, downloadFiles, downloadFileAs, previewFile } from '@/composables/useTauri'
+import { listDir, uploadFiles, downloadFiles, downloadFileAs, previewFile, saveBookmark } from '@/composables/useTauri'
 import type { FileEntry, FilePreview } from '@/types/filesystem'
+import type { Bookmark } from '@/types/connection'
 
 interface Column {
   /** Directory this column lists. */
@@ -348,6 +349,41 @@ async function ctxSaveAs() {
   }
 }
 
+async function ctxAddBookmark() {
+  const entry = ctxMenu.value.entry
+  hideCtxMenu()
+  const tab = tabsStore.activeTab
+  const params = tab?.connectParams
+  if (!tab || !params) return
+
+  // Bookmark the folder itself, or the containing dir for files
+  const path = entry?.isDir ? entry.path : currentPath.value
+  const alias = prompt('Bookmark alias:', path)
+  if (alias === null) return
+
+  const bookmark: Bookmark = {
+    id: crypto.randomUUID(),
+    alias: alias.trim() || path,
+    host: params.host,
+    port: params.port,
+    username: params.username,
+    authMethod: params.auth.type,
+    path,
+  }
+  if (params.auth.type === 'key') {
+    bookmark.privateKeyPath = params.auth.key_path
+    if (params.auth.passphrase) bookmark.passphrase = params.auth.passphrase
+  } else if (params.auth.type === 'password') {
+    bookmark.password = params.auth.password
+  }
+
+  try {
+    await saveBookmark(bookmark)
+  } catch (e) {
+    console.error('Save bookmark failed:', e)
+  }
+}
+
 // Drag & drop upload using Tauri 2 native API
 let unlistenDragDrop: (() => void) | null = null
 let suppressWatch = false
@@ -540,6 +576,9 @@ watch(viewMode, () => {
         @click="ctxSaveAs"
       >
         💾 Save As…
+      </button>
+      <button class="ctx-item" @click="ctxAddBookmark">
+        ⭐ Add Bookmark{{ ctxMenu.entry && !ctxMenu.entry.isDir ? ' (folder)' : '' }}
       </button>
     </div>
 
