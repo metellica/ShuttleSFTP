@@ -20,15 +20,21 @@ const PREVIEW_MAX_BYTES: usize = 256 * 1024;
 pub async fn preview_file(
     session_id: String,
     path: String,
+    full: Option<bool>,
     session_manager: State<'_, SessionManager>,
 ) -> AppResult<FilePreview> {
+    let cap = if full.unwrap_or(false) {
+        usize::MAX
+    } else {
+        PREVIEW_MAX_BYTES
+    };
     let session = session_manager.get_session(&session_id).await?;
     let session = session.lock().await;
     // Read one extra byte to detect truncation
-    let bytes = session.sftp.read_head(&path, PREVIEW_MAX_BYTES + 1).await?;
+    let bytes = session.sftp.read_head(&path, cap.saturating_add(1)).await?;
 
-    let truncated = bytes.len() > PREVIEW_MAX_BYTES;
-    let data = &bytes[..bytes.len().min(PREVIEW_MAX_BYTES)];
+    let truncated = bytes.len() > cap;
+    let data = &bytes[..bytes.len().min(cap)];
 
     // Binary sniffing: NUL byte or too many non-UTF8 sequences => binary
     if data.contains(&0u8) {

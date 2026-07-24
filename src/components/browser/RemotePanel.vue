@@ -215,6 +215,23 @@ async function loadPreview(entry: FileEntry) {
   }
 }
 
+async function loadFullPreview() {
+  const entry = preview.value.entry
+  if (!entry || !sessionId.value || preview.value.loading) return
+  preview.value = { entry, loading: true, data: preview.value.data }
+  try {
+    const data = await previewFile(sessionId.value, entry.path, true)
+    if (preview.value.entry?.path === entry.path) {
+      preview.value = { entry, loading: false, data: { ...data, truncated: false } }
+    }
+  } catch (e) {
+    console.error('Full preview failed:', e)
+    if (preview.value.entry?.path === entry.path) {
+      preview.value = { entry, loading: false, data: preview.value.data }
+    }
+  }
+}
+
 function formatSize(bytes: number): string {
   if (bytes === 0) return '-'
   const units = ['B', 'KB', 'MB', 'GB']
@@ -554,6 +571,7 @@ watch(viewMode, () => {
           <pre class="preview-text">{{ preview.data.content }}</pre>
           <div v-if="preview.data.truncated" class="preview-status">
             — preview truncated —
+            <button class="preview-load-full" @click="loadFullPreview">Load full content</button>
           </div>
         </template>
         <div v-else class="preview-status">No preview available (binary or large file)</div>
@@ -915,6 +933,21 @@ watch(viewMode, () => {
   color: #6c7086;
   font-size: 12px;
   text-align: center;
+}
+
+.preview-load-full {
+  margin-left: 8px;
+  padding: 3px 10px;
+  background: #313244;
+  color: #cdd6f4;
+  border: 1px solid #45475a;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.preview-load-full:hover {
+  background: #45475a;
 }
 
 .drop-overlay {

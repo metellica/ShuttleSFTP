@@ -23,8 +23,8 @@ export const removeEntry = (sessionId: string, path: string, isDir: boolean) =>
 export const renameEntry = (sessionId: string, oldPath: string, newPath: string) =>
   invoke<void>('rename', { sessionId, oldPath, newPath })
 
-export const previewFile = (sessionId: string, path: string) =>
-  invoke<FilePreview>('preview_file', { sessionId, path })
+export const previewFile = (sessionId: string, path: string, full = false) =>
+  invoke<FilePreview>('preview_file', { sessionId, path, full })
 
 // Transfer
 export const uploadFiles = (sessionId: string, localPaths: string[], remoteDir: string) =>
