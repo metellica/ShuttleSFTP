@@ -22,6 +22,8 @@ const transferStore = useTransferStore()
 const columns = ref<Column[]>([])
 const dragOver = ref(false)
 const selectedPaths = ref<Set<string>>(new Set())
+/** Anchor for shift+click range selection (colIndex is null in list view). */
+const selectionAnchor = ref<{ colIndex: number | null; path: string } | null>(null)
 const columnsEl = ref<HTMLElement | null>(null)
 
 type ViewMode = 'columns' | 'list'
@@ -151,9 +153,36 @@ function navigateTo(path: string) {
   }
 }
 
+/** Select the range between the anchor and the clicked entry within one entry list. */
+function selectRange(
+  entries: FileEntry[],
+  entry: FileEntry,
+  anchorPath: string | null,
+  additive: boolean
+) {
+  const clickedIdx = entries.findIndex((e) => e.path === entry.path)
+  let anchorIdx = anchorPath ? entries.findIndex((e) => e.path === anchorPath) : -1
+  if (anchorIdx === -1) anchorIdx = clickedIdx
+  if (!additive) selectedPaths.value.clear()
+  const lo = Math.min(anchorIdx, clickedIdx)
+  const hi = Math.max(anchorIdx, clickedIdx)
+  for (let i = lo; i <= hi; i++) {
+    const e = entries[i]
+    if (e) selectedPaths.value.add(e.path)
+  }
+}
+
 async function onEntryClick(colIndex: number, entry: FileEntry, event: MouseEvent) {
   const col = columns.value[colIndex]
   if (!col) return
+
+  if (event.shiftKey) {
+    // Range select within this column, anchored at the last non-shift click
+    const anchor = selectionAnchor.value
+    const anchorPath = anchor && anchor.colIndex === colIndex ? anchor.path : null
+    selectRange(col.entries, entry, anchorPath, event.ctrlKey || event.metaKey)
+    return
+  }
 
   if (event.ctrlKey || event.metaKey) {
     // Multi-select toggle without changing columns
@@ -161,12 +190,14 @@ async function onEntryClick(colIndex: number, entry: FileEntry, event: MouseEven
       selectedPaths.value.delete(entry.path)
     } else {
       selectedPaths.value.add(entry.path)
+      selectionAnchor.value = { colIndex, path: entry.path }
     }
     return
   }
 
   selectedPaths.value.clear()
   selectedPaths.value.add(entry.path)
+  selectionAnchor.value = { colIndex, path: entry.path }
   col.selectedPath = entry.path
 
   if (entry.isDir) {
@@ -251,16 +282,24 @@ function formatDate(ts: number): string {
 
 // Explorer list view interactions
 function onListClick(entry: FileEntry, event: MouseEvent) {
+  if (event.shiftKey) {
+    const anchor = selectionAnchor.value
+    const anchorPath = anchor && anchor.colIndex === null ? anchor.path : null
+    selectRange(listEntries.value, entry, anchorPath, event.ctrlKey || event.metaKey)
+    return
+  }
   if (event.ctrlKey || event.metaKey) {
     if (selectedPaths.value.has(entry.path)) {
       selectedPaths.value.delete(entry.path)
     } else {
       selectedPaths.value.add(entry.path)
+      selectionAnchor.value = { colIndex: null, path: entry.path }
     }
     return
   }
   selectedPaths.value.clear()
   selectedPaths.value.add(entry.path)
+  selectionAnchor.value = { colIndex: null, path: entry.path }
   if (entry.isDir) {
     preview.value = { entry: null, loading: false, data: null }
   } else {
@@ -443,6 +482,7 @@ watch(
       return
     }
     selectedPaths.value.clear()
+    selectionAnchor.value = null
     preview.value = { entry: null, loading: false, data: null }
     if (viewMode.value === 'columns') {
       buildColumns(newPath)
@@ -455,6 +495,7 @@ watch(
 
 watch(viewMode, () => {
   selectedPaths.value.clear()
+  selectionAnchor.value = null
   preview.value = { entry: null, loading: false, data: null }
   if (viewMode.value === 'columns') {
     buildColumns(currentPath.value)
@@ -743,6 +784,7 @@ watch(viewMode, () => {
   margin: 1px 6px;
   color: #cdd6f4;
   transition: background 0.08s;
+  user-select: none;
 }
 
 .entry:hover {
@@ -835,6 +877,7 @@ watch(viewMode, () => {
   cursor: pointer;
   color: #cdd6f4;
   transition: background 0.08s;
+  user-select: none;
 }
 
 .file-row:hover {
