@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, computed, onMounted, onUnmounted } from 'vue'
+import { ref, watch, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { useTabsStore } from '@/stores/tabs'
@@ -58,6 +58,65 @@ const previewCtxMenu = ref<{ visible: boolean; x: number; y: number; hasSelectio
 
 const currentPath = computed(() => tabsStore.activeTab?.currentPath || '/')
 const sessionId = computed(() => tabsStore.activeTab?.sessionId || '')
+
+// Editable path bar state
+const pathEdit = ref<{ active: boolean; value: string }>({ active: false, value: '' })
+const pathInputEl = ref<HTMLInputElement | null>(null)
+const pathCtxMenu = ref<{ visible: boolean; x: number; y: number }>({ visible: false, x: 0, y: 0 })
+
+function normalizePath(p: string): string {
+  let path = p.trim().replace(/\\/g, '/')
+  if (!path.startsWith('/')) path = '/' + path
+  path = path.replace(/\/+/g, '/')
+  if (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1)
+  return path
+}
+
+function startPathEdit() {
+  pathEdit.value = { active: true, value: currentPath.value }
+  nextTick(() => {
+    pathInputEl.value?.focus()
+    pathInputEl.value?.select()
+  })
+}
+
+function commitPathEdit() {
+  const target = pathEdit.value.value.trim()
+  pathEdit.value.active = false
+  if (target && normalizePath(target) !== currentPath.value) {
+    navigateTo(normalizePath(target))
+  }
+}
+
+function cancelPathEdit() {
+  pathEdit.value.active = false
+}
+
+function onPathBarContextMenu(event: MouseEvent) {
+  ctxMenu.value.visible = false
+  previewCtxMenu.value.visible = false
+  pathCtxMenu.value = { visible: true, x: event.clientX, y: event.clientY }
+}
+
+async function copyPath() {
+  pathCtxMenu.value.visible = false
+  await copyToClipboard(currentPath.value)
+}
+
+async function pastePathAndGo() {
+  pathCtxMenu.value.visible = false
+  try {
+    const text = (await navigator.clipboard.readText()).trim()
+    if (text) navigateTo(normalizePath(text))
+  } catch (e) {
+    console.error('Clipboard read failed:', e)
+  }
+}
+
+function ctxEditPath() {
+  pathCtxMenu.value.visible = false
+  startPathEdit()
+}
 
 // Breadcrumb segments for the path bar
 const breadcrumbs = computed(() => {
@@ -337,6 +396,7 @@ function onEntryContextMenu(colIndex: number, entry: FileEntry, event: MouseEven
 function hideCtxMenu() {
   ctxMenu.value.visible = false
   previewCtxMenu.value.visible = false
+  pathCtxMenu.value.visible = false
 }
 
 // Preview context menu (copy)
@@ -508,18 +568,33 @@ watch(viewMode, () => {
 <template>
   <div class="remote-panel" :class="{ 'drag-over': dragOver }">
     <!-- Breadcrumb path bar -->
-    <div class="path-bar">
-      <template v-for="(crumb, i) in breadcrumbs" :key="crumb.path">
-        <span v-if="i > 0" class="crumb-sep">›</span>
-        <button
-          class="crumb"
-          :class="{ current: i === breadcrumbs.length - 1 }"
-          @click="navigateTo(crumb.path)"
-        >
-          {{ crumb.name }}
-        </button>
+    <div class="path-bar" @contextmenu.prevent="onPathBarContextMenu">
+      <template v-if="pathEdit.active">
+        <input
+          ref="pathInputEl"
+          v-model="pathEdit.value"
+          class="path-input"
+          spellcheck="false"
+          @keydown.enter="commitPathEdit"
+          @keydown.esc="cancelPathEdit"
+          @blur="cancelPathEdit"
+        />
       </template>
-      <span class="path-spacer" />
+      <template v-else>
+        <template v-for="(crumb, i) in breadcrumbs" :key="crumb.path">
+          <span v-if="i > 0" class="crumb-sep">›</span>
+          <button
+            class="crumb"
+            :class="{ current: i === breadcrumbs.length - 1 }"
+            @click="navigateTo(crumb.path)"
+          >
+            {{ crumb.name }}
+          </button>
+        </template>
+        <span class="path-spacer" title="Click to edit path" @click="startPathEdit" />
+        <button class="toggle-btn" title="Copy path" @click="copyPath">📋</button>
+        <button class="toggle-btn" title="Edit path" @click="startPathEdit">✏️</button>
+      </template>
       <div class="view-toggle">
         <button
           class="toggle-btn"
@@ -662,6 +737,18 @@ watch(viewMode, () => {
         📄 Copy All
       </button>
     </div>
+
+    <!-- Path bar menu -->
+    <div
+      v-if="pathCtxMenu.visible"
+      class="ctx-menu"
+      :style="{ left: pathCtxMenu.x + 'px', top: pathCtxMenu.y + 'px' }"
+      @click.stop
+    >
+      <button class="ctx-item" @click="copyPath">📋 Copy Path</button>
+      <button class="ctx-item" @click="pastePathAndGo">📥 Paste &amp; Go</button>
+      <button class="ctx-item" @click="ctxEditPath">✏️ Edit Path</button>
+    </div>
   </div>
 </template>
 
@@ -717,6 +804,21 @@ watch(viewMode, () => {
 
 .path-spacer {
   flex: 1;
+  align-self: stretch;
+  cursor: text;
+}
+
+.path-input {
+  flex: 1;
+  background: #11111b;
+  border: 1px solid #4f6ec2;
+  border-radius: 5px;
+  color: #cdd6f4;
+  font-size: 13px;
+  font-family: monospace;
+  padding: 3px 8px;
+  outline: none;
+  min-width: 0;
 }
 
 .view-toggle {
