@@ -73,6 +73,18 @@ pub async fn preview_file(
 }
 
 #[tauri::command]
+pub async fn save_file(
+    session_id: String,
+    path: String,
+    content: String,
+    session_manager: State<'_, SessionManager>,
+) -> AppResult<()> {
+    let session = session_manager.get_session(&session_id).await?;
+    let session = session.lock().await;
+    session.sftp.write_file(&path, content.as_bytes()).await
+}
+
+#[tauri::command]
 pub async fn list_dir(
     session_id: String,
     path: String,

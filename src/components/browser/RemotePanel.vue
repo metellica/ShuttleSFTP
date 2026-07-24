@@ -4,7 +4,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { useTabsStore } from '@/stores/tabs'
 import { useTransferStore } from '@/stores/transfer'
-import { listDir, uploadFiles, downloadFiles, downloadFileAs, previewFile, saveBookmark } from '@/composables/useTauri'
+import { listDir, uploadFiles, downloadFiles, downloadFileAs, previewFile, saveFileContent, saveBookmark } from '@/composables/useTauri'
 import type { FileEntry, FilePreview } from '@/types/filesystem'
 import type { Bookmark } from '@/types/connection'
 
@@ -49,6 +49,86 @@ const preview = ref<{
   loading: boolean
   data: FilePreview | null
 }>({ entry: null, loading: false, data: null })
+const previewMaximized = ref(false)
+const previewEdit = ref<{ active: boolean; text: string; saving: boolean }>({
+  active: false,
+  text: '',
+  saving: false,
+})
+const previewDirty = computed(
+  () => previewEdit.value.active && previewEdit.value.text !== (preview.value.data?.content ?? '')
+)
+
+// Line numbers for preview and editor
+const previewLines = computed(() => (preview.value.data?.content ?? '').split('\n'))
+const editorEl = ref<HTMLTextAreaElement | null>(null)
+const gutterEl = ref<HTMLElement | null>(null)
+const mirrorEl = ref<HTMLElement | null>(null)
+const editLineHeights = ref<number[]>([])
+
+const gutterWidth = computed(() => {
+  const count = previewEdit.value.active
+    ? editLineHeights.value.length
+    : previewLines.value.length
+  const digits = Math.max(2, String(Math.max(1, count)).length)
+  return `calc(${digits}ch + 18px)`
+})
+
+/** Measure the rendered height of each logical line (soft wrap aware) via a hidden mirror. */
+function recomputeLineHeights() {
+  const ta = editorEl.value
+  const mirror = mirrorEl.value
+  if (!ta || !mirror) return
+  mirror.style.width = ta.clientWidth + 'px'
+  mirror.textContent = ''
+  const lines = previewEdit.value.text.split('\n')
+  const frag = document.createDocumentFragment()
+  for (const line of lines) {
+    const div = document.createElement('div')
+    div.textContent = line.length > 0 ? line : ' '
+    frag.appendChild(div)
+  }
+  mirror.appendChild(frag)
+  const heights: number[] = []
+  for (const child of Array.from(mirror.children)) {
+    heights.push((child as HTMLElement).offsetHeight)
+  }
+  editLineHeights.value = heights
+  mirror.textContent = ''
+  syncGutterScroll()
+}
+
+let recomputeTimer: number | undefined
+function scheduleRecompute() {
+  if (recomputeTimer !== undefined) clearTimeout(recomputeTimer)
+  recomputeTimer = window.setTimeout(recomputeLineHeights, 60)
+}
+
+function syncGutterScroll() {
+  if (gutterEl.value && editorEl.value) {
+    gutterEl.value.scrollTop = editorEl.value.scrollTop
+  }
+}
+
+watch(
+  () => previewEdit.value.text,
+  () => {
+    if (previewEdit.value.active) scheduleRecompute()
+  }
+)
+watch(
+  () => previewEdit.value.active,
+  (active) => {
+    if (active) {
+      nextTick(recomputeLineHeights)
+    } else {
+      editLineHeights.value = []
+    }
+  }
+)
+watch(previewMaximized, () => {
+  if (previewEdit.value.active) nextTick(recomputeLineHeights)
+})
 const previewCtxMenu = ref<{ visible: boolean; x: number; y: number; hasSelection: boolean }>({
   visible: false,
   x: 0,
@@ -286,6 +366,7 @@ async function onEntryClick(colIndex: number, entry: FileEntry, event: MouseEven
 const PREVIEWABLE_SIZE = 10 * 1024 * 1024 // don't preview files larger than 10MB
 
 async function loadPreview(entry: FileEntry) {
+  previewEdit.value = { active: false, text: '', saving: false }
   preview.value = { entry, loading: true, data: null }
   if (entry.size > PREVIEWABLE_SIZE || !sessionId.value) {
     preview.value = { entry, loading: false, data: null }
@@ -321,6 +402,71 @@ async function loadFullPreview() {
     }
   }
 }
+
+const EDITABLE_SIZE = 2 * 1024 * 1024 // don't edit files larger than 2MB
+
+const previewEditable = computed(() => {
+  const p = preview.value
+  return (
+    !!p.entry &&
+    !p.loading &&
+    !!p.data?.isText &&
+    p.data.content !== null &&
+    p.entry.size <= EDITABLE_SIZE
+  )
+})
+
+async function startPreviewEdit() {
+  if (!previewEditable.value) return
+  if (preview.value.data?.truncated) {
+    await loadFullPreview()
+  }
+  const content = preview.value.data?.content
+  if (content === null || content === undefined) return
+  previewEdit.value = { active: true, text: content, saving: false }
+}
+
+function cancelPreviewEdit() {
+  if (previewDirty.value && !confirm('Discard unsaved changes?')) return
+  previewEdit.value = { active: false, text: '', saving: false }
+}
+
+async function savePreviewEdit() {
+  const entry = preview.value.entry
+  if (!entry || !sessionId.value || !previewEdit.value.active || previewEdit.value.saving) return
+  previewEdit.value.saving = true
+  try {
+    await saveFileContent(sessionId.value, entry.path, previewEdit.value.text)
+    if (preview.value.data) {
+      preview.value.data = {
+        ...preview.value.data,
+        content: previewEdit.value.text,
+        truncated: false,
+      }
+    }
+    previewEdit.value = { active: false, text: '', saving: false }
+    await refresh() // pick up the new file size in listings
+  } catch (e) {
+    console.error('Save failed:', e)
+    alert('Failed to save file: ' + e)
+    previewEdit.value.saving = false
+  }
+}
+
+function togglePreviewMaximized() {
+  previewMaximized.value = !previewMaximized.value
+}
+
+// Reset maximize/edit state whenever the preview pane closes
+watch(
+  () => preview.value.entry,
+  (entry) => {
+    if (!entry) {
+      previewMaximized.value = false
+      previewEdit.value = { active: false, text: '', saving: false }
+    }
+  }
+)
 
 function formatSize(bytes: number): string {
   if (bytes === 0) return '-'
@@ -401,6 +547,9 @@ function hideCtxMenu() {
 
 // Preview context menu (copy)
 function onPreviewContextMenu(event: MouseEvent) {
+  // Keep the native menu (cut/copy/paste/undo) inside the editor textarea
+  if ((event.target as HTMLElement | null)?.tagName === 'TEXTAREA') return
+  event.preventDefault()
   ctxMenu.value.visible = false
   const selection = window.getSelection()?.toString() ?? ''
   previewCtxMenu.value = {
@@ -509,6 +658,7 @@ let suppressWatch = false
 
 onMounted(async () => {
   window.addEventListener('click', hideCtxMenu)
+  window.addEventListener('resize', scheduleRecompute)
   unlistenDragDrop = await getCurrentWebview().onDragDropEvent(async (event) => {
     if (event.payload.type === 'enter' || event.payload.type === 'over') {
       dragOver.value = true
@@ -531,6 +681,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('click', hideCtxMenu)
+  window.removeEventListener('resize', scheduleRecompute)
   unlistenDragDrop?.()
 })
 
@@ -617,7 +768,7 @@ watch(viewMode, () => {
 
     <div class="body">
       <!-- Finder-style Miller columns -->
-      <div v-if="viewMode === 'columns'" class="columns" ref="columnsEl">
+      <div v-if="viewMode === 'columns'" v-show="!previewMaximized" class="columns" ref="columnsEl">
         <div v-for="(col, colIndex) in columns" :key="col.path" class="column">
           <div v-if="col.loading" class="col-loading">Loading...</div>
           <template v-else>
@@ -643,7 +794,7 @@ watch(viewMode, () => {
       </div>
 
       <!-- Windows Explorer-style details list -->
-      <div v-else class="list-view">
+      <div v-else v-show="!previewMaximized" class="list-view">
         <div v-if="listLoading" class="col-loading">Loading...</div>
         <template v-else>
           <div class="file-header">
@@ -674,17 +825,85 @@ watch(viewMode, () => {
       </div>
 
       <!-- Preview pane for the selected file -->
-      <div v-if="preview.entry" class="preview-col" @contextmenu.prevent="onPreviewContextMenu">
+      <div
+        v-if="preview.entry"
+        class="preview-col"
+        :class="{ maximized: previewMaximized }"
+        @contextmenu="onPreviewContextMenu"
+      >
         <div class="preview-head">
           <span class="preview-icon">📄</span>
           <div class="preview-meta">
             <div class="preview-name" :title="preview.entry.name">{{ preview.entry.name }}</div>
-            <div class="preview-info">{{ formatSize(preview.entry.size) }}</div>
+            <div class="preview-info">
+              {{ formatSize(preview.entry.size) }}<span v-if="previewDirty"> · modified</span>
+            </div>
+          </div>
+          <span class="preview-spacer" />
+          <div class="preview-actions">
+            <template v-if="previewEdit.active">
+              <button
+                class="toggle-btn"
+                :disabled="previewEdit.saving || !previewDirty"
+                title="Save (Ctrl+S)"
+                @click="savePreviewEdit"
+              >
+                💾
+              </button>
+              <button class="toggle-btn" title="Cancel editing" @click="cancelPreviewEdit">✕</button>
+            </template>
+            <button
+              v-else
+              class="toggle-btn"
+              :disabled="!previewEditable"
+              title="Edit file"
+              @click="startPreviewEdit"
+            >
+              ✏️
+            </button>
+            <button
+              class="toggle-btn"
+              :title="previewMaximized ? 'Restore' : 'Maximize'"
+              @click="togglePreviewMaximized"
+            >
+              {{ previewMaximized ? '🗗' : '🗖' }}
+            </button>
           </div>
         </div>
         <div v-if="preview.loading" class="preview-status">Loading preview…</div>
+        <template v-else-if="previewEdit.active">
+          <div class="editor-wrap">
+            <div ref="gutterEl" class="editor-gutter" :style="{ width: gutterWidth }">
+              <div
+                v-for="(h, i) in editLineHeights"
+                :key="i"
+                class="code-ln"
+                :style="{ height: h + 'px' }"
+              >
+                {{ i + 1 }}
+              </div>
+            </div>
+            <textarea
+              ref="editorEl"
+              v-model="previewEdit.text"
+              class="preview-editor"
+              spellcheck="false"
+              :disabled="previewEdit.saving"
+              @scroll="syncGutterScroll"
+              @keydown.ctrl.s.prevent="savePreviewEdit"
+              @keydown.meta.s.prevent="savePreviewEdit"
+            />
+            <div ref="mirrorEl" class="editor-mirror" aria-hidden="true"></div>
+          </div>
+          <div v-if="previewEdit.saving" class="preview-status">Saving…</div>
+        </template>
         <template v-else-if="preview.data?.isText && preview.data.content !== null">
-          <pre class="preview-text">{{ preview.data.content }}</pre>
+          <div class="code-view">
+            <div v-for="(line, i) in previewLines" :key="i" class="code-line">
+              <span class="code-ln" :style="{ width: gutterWidth }">{{ i + 1 }}</span>
+              <span class="code-text">{{ line }}</span>
+            </div>
+          </div>
           <div v-if="preview.data.truncated" class="preview-status">
             — preview truncated —
             <button class="preview-load-full" @click="loadFullPreview">Load full content</button>
@@ -1028,6 +1247,85 @@ watch(viewMode, () => {
   flex-shrink: 0;
 }
 
+.preview-col.maximized {
+  width: 100%;
+  flex: 1;
+  border-left: none;
+}
+
+.preview-spacer {
+  flex: 1;
+}
+
+.preview-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+/* Shared code font for preview and editor */
+.code-view,
+.editor-gutter,
+.editor-mirror,
+.preview-editor {
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.editor-wrap {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  position: relative;
+  background: #11111b;
+}
+
+.editor-gutter {
+  flex-shrink: 0;
+  overflow: hidden;
+  padding: 12px 0 12px 0;
+  background: #11111b;
+  border-right: 1px solid #2a2a3d;
+}
+
+.code-ln {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  padding: 0 10px 0 8px;
+  text-align: right;
+  color: #6c7086;
+  user-select: none;
+}
+
+.preview-editor {
+  flex: 1;
+  margin: 0;
+  padding: 12px 14px 12px 10px;
+  color: #cdd6f4;
+  background: #11111b;
+  border: none;
+  outline: none;
+  resize: none;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-width: 0;
+}
+
+/* Hidden mirror used to measure wrapped line heights */
+.editor-mirror {
+  position: absolute;
+  top: 0;
+  left: -99999px;
+  visibility: hidden;
+  box-sizing: border-box;
+  padding: 0 14px 0 10px;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
 .preview-head {
   display: flex;
   align-items: center;
@@ -1060,17 +1358,25 @@ watch(viewMode, () => {
   margin-top: 2px;
 }
 
-.preview-text {
+.code-view {
   flex: 1;
   margin: 0;
-  padding: 12px 14px;
-  font-family: 'Cascadia Code', Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.5;
+  padding: 12px 0;
   color: #cdd6f4;
-  white-space: pre-wrap;
-  word-break: break-all;
   overflow-y: auto;
+}
+
+.code-line {
+  display: flex;
+  min-height: 1.5em;
+}
+
+.code-text {
+  flex: 1;
+  min-width: 0;
+  padding-right: 14px;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
 }
 
 .preview-status {

@@ -26,6 +26,9 @@ export const renameEntry = (sessionId: string, oldPath: string, newPath: string)
 export const previewFile = (sessionId: string, path: string, full = false) =>
   invoke<FilePreview>('preview_file', { sessionId, path, full })
 
+export const saveFileContent = (sessionId: string, path: string, content: string) =>
+  invoke<void>('save_file', { sessionId, path, content })
+
 // Transfer
 export const uploadFiles = (sessionId: string, localPaths: string[], remoteDir: string) =>
   invoke<string[]>('upload', { sessionId, localPaths, remoteDir })

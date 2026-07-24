@@ -209,6 +209,24 @@ impl SftpClient {
         Ok(buf)
     }
 
+    /// Overwrite a remote file with the given bytes (create if missing).
+    pub async fn write_file(&self, path: &str, data: &[u8]) -> AppResult<()> {
+        use tokio::io::AsyncWriteExt;
+
+        let mut file = self
+            .sftp
+            .create(path)
+            .await
+            .map_err(|e| AppError::SftpError(e.to_string()))?;
+        file.write_all(data)
+            .await
+            .map_err(|e| AppError::SftpError(e.to_string()))?;
+        file.shutdown()
+            .await
+            .map_err(|e| AppError::SftpError(e.to_string()))?;
+        Ok(())
+    }
+
     /// Get the underlying SFTP session for transfer operations.
     pub fn sftp_session(&self) -> &SftpSession {
         &self.sftp
