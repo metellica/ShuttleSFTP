@@ -6,6 +6,7 @@ import {
   sshConnect,
   connectLocal,
 } from '@/composables/useTauri'
+import { promptText } from '@/composables/usePrompt'
 import type { Bookmark, ConnectParams, ConnectedMeta } from '@/types/connection'
 
 const emit = defineEmits<{
@@ -34,7 +35,7 @@ onMounted(async () => {
   }
 })
 
-function buildParams(bm: Bookmark): ConnectParams | null {
+async function buildParams(bm: Bookmark): Promise<ConnectParams | null> {
   let auth: ConnectParams['auth']
   if (bm.authMethod === 'key') {
     auth = { type: 'key', key_path: bm.privateKeyPath || '', passphrase: bm.passphrase || null }
@@ -43,7 +44,7 @@ function buildParams(bm: Bookmark): ConnectParams | null {
   } else {
     let password = bm.password
     if (!password) {
-      const input = prompt(`Password for ${bm.username}@${bm.host}:`)
+      const input = await promptText(`Password for ${bm.username}@${bm.host}:`, { password: true })
       if (input === null) return null
       password = input
     }
@@ -65,7 +66,7 @@ async function connect(bm: Bookmark) {
         params: null,
       })
     } else {
-      const params = buildParams(bm)
+      const params = await buildParams(bm)
       if (!params) return
       const sessionId = await sshConnect(params)
       emit('connected', sessionId, `${bm.username}@${bm.alias}`, bm.path, {

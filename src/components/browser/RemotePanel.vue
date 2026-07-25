@@ -6,6 +6,7 @@ import { useTabsStore } from '@/stores/tabs'
 import { useTransferStore } from '@/stores/transfer'
 import { useClipboardStore } from '@/stores/clipboard'
 import { listDir, mkDir, uploadFiles, downloadFiles, downloadFileAs, previewFile, saveFileContent, saveBookmark, removeEntry, transferRemote } from '@/composables/useTauri'
+import { promptText } from '@/composables/usePrompt'
 import type { FileEntry, FilePreview } from '@/types/filesystem'
 import type { Bookmark } from '@/types/connection'
 
@@ -476,8 +477,8 @@ async function startPreviewEdit() {
   previewEdit.value = { active: true, text: content, saving: false }
 }
 
-function cancelPreviewEdit() {
-  if (previewDirty.value && !confirm('Discard unsaved changes?')) return
+async function cancelPreviewEdit() {
+  if (previewDirty.value && !(await ask('Discard unsaved changes?', { title: 'Edit File', kind: 'warning' }))) return
   previewEdit.value = { active: false, text: '', saving: false }
 }
 
@@ -498,7 +499,7 @@ async function savePreviewEdit() {
     await refresh() // pick up the new file size in listings
   } catch (e) {
     console.error('Save failed:', e)
-    alert('Failed to save file: ' + e)
+    await message('Failed to save file: ' + e, { title: 'Edit File', kind: 'error' })
     previewEdit.value.saving = false
   }
 }
@@ -718,7 +719,7 @@ async function ctxNewFolder() {
   hideCtxMenu()
   const sid = sessionId.value
   if (!sid) return
-  const name = prompt('New folder name:')
+  const name = await promptText('New folder name:')
   if (!name?.trim()) return
   try {
     await mkDir(sid, dir === '/' ? `/${name.trim()}` : `${dir}/${name.trim()}`)
@@ -850,7 +851,7 @@ async function ctxAddBookmark() {
 
   // Bookmark the folder itself, or the containing dir for files
   const path = entry?.isDir ? entry.path : currentPath.value
-  const alias = prompt('Bookmark alias:', path)
+  const alias = await promptText('Bookmark alias:', { defaultValue: path })
   if (alias === null) return
 
   const bookmark: Bookmark = {

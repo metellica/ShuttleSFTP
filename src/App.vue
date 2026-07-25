@@ -10,6 +10,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { uploadFiles, downloadFiles, mkDir, listBookmarks } from '@/composables/useTauri'
+import { promptText } from '@/composables/usePrompt'
 import { useTransferStore } from '@/stores/transfer'
 import type { TransferProgress, TransferTask } from '@/types/transfer'
 import type { ConnectedMeta } from '@/types/connection'
@@ -192,7 +193,7 @@ async function onNewFolder() {
   const tab = tabsStore.activeTab
   if (!tab?.sessionId) return
 
-  const name = prompt('Enter folder name:')
+  const name = await promptText('Enter folder name:')
   if (!name) return
 
   const path = tab.currentPath === '/'

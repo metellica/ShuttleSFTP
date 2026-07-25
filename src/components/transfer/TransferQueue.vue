@@ -12,7 +12,7 @@ import {
   showInFolder,
 } from '@/composables/useTauri'
 import { connectForTransferTask } from '@/composables/useAutoConnect'
-import { ask } from '@tauri-apps/plugin-dialog'
+import { ask, message } from '@tauri-apps/plugin-dialog'
 import type { TransferTask } from '@/types/transfer'
 
 const transferStore = useTransferStore()
@@ -120,14 +120,14 @@ async function onResume(task: TransferTask) {
     // No live session for this task: auto-connect from saved credentials
     const sessionId = await connectForTransferTask(task)
     if (!sessionId) {
-      alert(`Cannot resume: ${e}`)
+      await message(`Cannot resume: ${e}`, { title: 'Transfer', kind: 'error' })
       return
     }
     try {
       await resumeTransfer(task.id, sessionId)
     } catch (e2) {
       console.error('Resume failed:', e2)
-      alert(`Cannot resume: ${e2}`)
+      await message(`Cannot resume: ${e2}`, { title: 'Transfer', kind: 'error' })
     }
   }
 }
@@ -193,7 +193,7 @@ async function onResumeGroup(group: GroupNode) {
     }
   }
   if (failed > 0) {
-    alert(`${failed} file(s) could not be resumed: connect to the matching server first.`)
+    await message(`${failed} file(s) could not be resumed: connect to the matching server first.`, { title: 'Transfer', kind: 'warning' })
   }
 }
 
@@ -265,9 +265,10 @@ async function onResumeAll() {
     const retried = new Set(connected ? await resumeAllTransfers() : [])
     const stuck = remaining.filter((t) => !retried.has(t.id))
     if (stuck.length > 0) {
-      alert(
+      await message(
         `${stuck.length} transfer(s) could not be resumed automatically. ` +
-          'No saved credentials found: connect to the matching server, then resume.'
+          'No saved credentials found: connect to the matching server, then resume.',
+        { title: 'Transfer', kind: 'warning' }
       )
     }
   } catch (e) {
