@@ -674,6 +674,24 @@ async function ctxCopyToTab(dstSessionId: string, dstDir: string) {
   }
 }
 
+/** Copy within the current session to a directory the user types. */
+async function ctxCopyToHere() {
+  const sid = sessionId.value
+  const targets = selectedFiles.value.map((f) => f.path)
+  hideCtxMenu()
+  if (!sid || targets.length === 0) return
+  const dest = prompt('Copy to directory (this session):', currentPath.value)
+  if (dest === null) return
+  const destDir = normalizePath(dest)
+  try {
+    await transferRemote(sid, targets, sid, destDir)
+    await transferStore.syncTasks()
+  } catch (e) {
+    console.error('Copy in session failed:', e)
+    await message(`Copy failed: ${e}`, { title: 'Copy to', kind: 'error' })
+  }
+}
+
 /** Drag files out of the panel: payload consumed by tabs (cross-session copy). */
 function onEntryDragStart(entry: FileEntry, event: DragEvent) {
   if (!selectedPaths.value.has(entry.path)) {
@@ -1075,6 +1093,9 @@ watch(viewMode, () => {
       <template v-if="ctxCopyToOpen">
         <button class="ctx-item ctx-sub" @click="ctxDownload">
           💻 Local…
+        </button>
+        <button class="ctx-item ctx-sub" @click="ctxCopyToHere">
+          📁 This session…
         </button>
         <button
           v-for="t in copyToTargets"
