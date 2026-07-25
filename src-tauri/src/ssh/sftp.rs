@@ -175,6 +175,29 @@ impl SftpClient {
             .map_err(|e| AppError::SftpError(e.to_string()))
     }
 
+    /// Remove a directory and all of its contents recursively.
+    pub async fn remove_dir_all(&self, path: &str) -> AppResult<()> {
+        // Breadth-first collect directories, deleting files along the way,
+        // then remove directories deepest-first.
+        let mut dirs = vec![path.to_string()];
+        let mut i = 0;
+        while i < dirs.len() {
+            let dir = dirs[i].clone();
+            for entry in self.list_dir(&dir).await? {
+                if entry.is_dir {
+                    dirs.push(entry.path);
+                } else {
+                    self.remove_file(&entry.path).await?;
+                }
+            }
+            i += 1;
+        }
+        for dir in dirs.iter().rev() {
+            self.remove_dir(dir).await?;
+        }
+        Ok(())
+    }
+
     /// Rename/move a file or directory.
     pub async fn rename(&self, old_path: &str, new_path: &str) -> AppResult<()> {
         self.sftp

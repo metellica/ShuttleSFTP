@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { ref, watch, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
-import { open, save } from '@tauri-apps/plugin-dialog'
+import { open, save, ask, message } from '@tauri-apps/plugin-dialog'
 import { useTabsStore } from '@/stores/tabs'
 import { useTransferStore } from '@/stores/transfer'
-import { listDir, uploadFiles, downloadFiles, downloadFileAs, previewFile, saveFileContent, saveBookmark } from '@/composables/useTauri'
+import { listDir, uploadFiles, downloadFiles, downloadFileAs, previewFile, saveFileContent, saveBookmark, removeEntry } from '@/composables/useTauri'
 import type { FileEntry, FilePreview } from '@/types/filesystem'
 import type { Bookmark } from '@/types/connection'
 
@@ -657,6 +657,42 @@ async function ctxSaveAs() {
   }
 }
 
+async function ctxDelete() {
+  hideCtxMenu()
+  const sid = sessionId.value
+  const targets = selectedFiles.value
+  if (!sid || targets.length === 0) return
+
+  const first = targets[0]
+  const what =
+    targets.length === 1 && first
+      ? `"${first.name}"`
+      : `${targets.length} selected items`
+  const confirmed = await ask(`Delete ${what}? This cannot be undone.`, {
+    title: 'Confirm Delete',
+    kind: 'warning',
+    okLabel: 'Delete',
+    cancelLabel: 'Cancel',
+  })
+  if (!confirmed) return
+
+  try {
+    for (const f of targets) {
+      await removeEntry(sid, f.path, f.isDir)
+      if (preview.value.entry?.path === f.path) {
+        preview.value = { entry: null, loading: false, data: null }
+        previewEdit.value = { active: false, text: '', saving: false }
+      }
+    }
+  } catch (e) {
+    console.error('Delete failed:', e)
+    await message(`Delete failed: ${e}`, { title: 'Delete', kind: 'error' })
+  }
+  selectedPaths.value.clear()
+  selectionAnchor.value = null
+  await refresh()
+}
+
 async function ctxAddBookmark() {
   const entry = ctxMenu.value.entry
   hideCtxMenu()
@@ -975,6 +1011,9 @@ watch(viewMode, () => {
       </button>
       <button class="ctx-item" @click="ctxAddBookmark">
         ⭐ Add Bookmark{{ ctxMenu.entry && !ctxMenu.entry.isDir ? ' (folder)' : '' }}
+      </button>
+      <button class="ctx-item ctx-danger" @click="ctxDelete">
+        🗑 Delete{{ selectedFiles.length > 1 ? ` (${selectedFiles.length} items)` : '' }}…
       </button>
     </div>
 
@@ -1490,6 +1529,10 @@ watch(viewMode, () => {
 
 .ctx-item:hover:not(:disabled) {
   background: #45475a;
+}
+
+.ctx-item.ctx-danger {
+  color: #f38ba8;
 }
 
 .ctx-item:disabled {

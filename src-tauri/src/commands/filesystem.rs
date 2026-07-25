@@ -116,7 +116,7 @@ pub async fn remove(
     let session = session_manager.get_session(&session_id).await?;
     let session = session.lock().await;
     if is_dir {
-        session.sftp.remove_dir(&path).await
+        session.sftp.remove_dir_all(&path).await
     } else {
         session.sftp.remove_file(&path).await
     }
