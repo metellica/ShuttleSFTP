@@ -9,7 +9,7 @@ import TransferQueue from '@/components/transfer/TransferQueue.vue'
 import { ref, onMounted, onUnmounted } from 'vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { uploadFiles, downloadFiles, mkDir } from '@/composables/useTauri'
+import { uploadFiles, downloadFiles, mkDir, listBookmarks } from '@/composables/useTauri'
 import { useTransferStore } from '@/stores/transfer'
 import type { TransferProgress, TransferTask } from '@/types/transfer'
 import type { ConnectedMeta } from '@/types/connection'
@@ -29,7 +29,18 @@ onMounted(async () => {
   document.addEventListener('contextmenu', preventDefaultContextMenu)
   if (tabsStore.tabs.length === 0) {
     tabsStore.addTab()
-    showConnectDialog.value = true
+    // Returning users go straight to their bookmarks; first-timers get
+    // the connect dialog.
+    try {
+      const bookmarks = await listBookmarks()
+      if (bookmarks.length > 0) {
+        showBookmarksDialog.value = true
+      } else {
+        showConnectDialog.value = true
+      }
+    } catch {
+      showConnectDialog.value = true
+    }
   }
 
   // Restore persisted transfers (interrupted ones come back as paused)

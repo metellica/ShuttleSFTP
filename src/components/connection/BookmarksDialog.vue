@@ -19,6 +19,13 @@ const error = ref('')
 
 const KIND_ICONS: Record<string, string> = { ssh: '⌁', local: '💻' }
 
+/** Bookmark icon: container/pod paths get their own marker. */
+function bookmarkIcon(bm: Bookmark): string {
+  if (bm.path.startsWith('/@containers')) return '▣'
+  if (bm.path.startsWith('/@pods')) return '⎈'
+  return KIND_ICONS[bm.kind ?? 'ssh'] ?? '⌁'
+}
+
 onMounted(async () => {
   try {
     bookmarks.value = await listBookmarks()
@@ -101,7 +108,7 @@ async function remove(bm: Bookmark) {
         <div v-for="bm in bookmarks" :key="bm.id" class="item">
           <div class="info" @dblclick="connect(bm)">
             <div class="alias" :title="bm.alias">
-              <span class="kind-icon">{{ KIND_ICONS[bm.kind ?? 'ssh'] }}</span>
+              <span class="kind-icon">{{ bookmarkIcon(bm) }}</span>
               {{ bm.alias }}
             </div>
             <div class="detail" :title="`${bookmarkTarget(bm)} ${bm.path}`">
