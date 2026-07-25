@@ -12,7 +12,7 @@ A fast, lightweight, cross-platform SFTP/SCP GUI built with **Tauri 2 + Vue 3 + 
 - ⎈ **K8s Pod File Access** — The `/@pods` virtual directory walks `namespace → pod → container` via `kubectl exec` (only needs kubeconfig + `pods/exec` RBAC on the host running kubectl)
 - 💻 **Local Sessions** — Open "This Machine" to browse local files plus your local Docker Desktop / nerdctl containers, no SSH required
 - 🧱 **Distroless-Proof Rootfs Mode** — On SSH hosts, containers are accessed directly through their rootfs on the host (docker `MergedDir` / containerd runtime v2 task dirs), so images without a shell or `tar` still work; falls back to exec+shell automatically
-- ⇄ **Any-to-Any Transfers** — Copy files between any two endpoints (local ⇄ host ⇄ container ⇄ pod) via right-click **Copy to** or by dragging files onto another tab; same-host copies run server-side without relaying through your machine
+- ⇄ **Any-to-Any Transfers** — Copy files between any two endpoints (local ⇄ host ⇄ container ⇄ pod): right-click **Copy** then **Paste** in any directory of any tab, drag files onto a folder or another tab, or right-click blank space to paste into the current directory; same-host copies run server-side without relaying through your machine
 - 📁 **Finder-Style Browser** — macOS Finder-like Miller columns with clickable breadcrumb path bar
 - 🧭 **Editable Path Bar** — Copy the current path, paste & go, or click to type a path directly
 - 🗒️ **Details View** — Windows Explorer-style list view (size, permissions, modified time), toggleable
@@ -20,6 +20,7 @@ A fast, lightweight, cross-platform SFTP/SCP GUI built with **Tauri 2 + Vue 3 + 
 - 👁️ **File Preview** — Inline text preview pane with gray line numbers, soft wrap, copy support, and maximize/restore
 - ✏️ **Remote Quick-Edit** — Edit text files in place (paste/undo, Ctrl+S) and save straight back to the server
 - 🖱️ **Drag & Drop Upload** — Drag files or folders from your OS file manager to upload
+- 📥 **Copy / Paste Between Sessions** — Mark files with **Copy** in one tab, **Paste** them into any folder of any other tab (host, container or pod); blank-space right-click offers Paste / New Folder / Refresh
 - ⬇️ **Flexible Download** — Toolbar download, right-click **Download…** / **Save As…** context menu
 - 🗑️ **Delete with Confirmation** — Right-click → **Delete** removes selected files or folders (recursive) after a native confirmation dialog
 - 🗂️ **Directory Transfers** — Recursive folder upload/download/save-as, shown as an expandable tree in the queue
@@ -93,11 +94,14 @@ ShuttleSFTP/
 │   │   ├── layout/         # Tab bar, toolbar
 │   │   └── transfer/       # Transfer queue UI
 │   ├── composables/        # Tauri IPC wrappers
-│   ├── stores/             # Pinia state (tabs, transfers)
+│   ├── stores/             # Pinia state (tabs, transfers, clipboard)
 │   └── types/              # TypeScript interfaces
 ├── src-tauri/              # Rust backend
 │   └── src/
+│       ├── fs/             # RemoteFs trait, local/host/rootfs backends
 │       ├── ssh/            # SSH session, auth, SFTP ops
+│       ├── exec/           # Command runners (local & over SSH)
+│       ├── container/      # Container/pod discovery + exec file access
 │       ├── transfer/       # Transfer engine & progress
 │       ├── config/         # SSH config parser, profiles
 │       └── commands/       # Tauri IPC command handlers
@@ -109,16 +113,24 @@ ShuttleSFTP/
 ## Usage
 
 1. Launch the app
-2. Click **+** or **Connect** to open a new session
+2. Click **+** or **Connect** to open a new session — choose **⌁ SSH Host** or **💻 This Machine** (local files + local container engines)
 3. Type in the Host field to fuzzy-search your SSH config hosts, or enter connection details manually
 4. Browse remote files in Finder-style columns — click a directory to expand it in the next column, click any breadcrumb segment to jump back
-5. **Path bar**: click the empty area (or ✏️) to type a path directly — Enter navigates, Esc cancels. Use 📋 to copy the current path, or right-click the bar for **Copy Path / Paste & Go / Edit Path**
-6. **Upload**: Drag files or folders from your desktop/file manager into the app, or use the **Upload** / **Upload Folder** buttons
-7. **Download**: Select files or folders (Ctrl+click to multi-select, Shift+click for a range) → click Download, or right-click → **Download…** / **Save As…**
-8. **Delete**: Right-click the selection → **🗑 Delete** — a confirmation dialog appears before anything is removed (folders are deleted recursively)
-9. **Preview & edit**: Click a text file to preview it with line numbers and soft wrap — 🗖 maximizes the pane. Click ✏️ to edit in place (paste/undo work natively), then 💾 or Ctrl+S saves back to the server; ✕ discards
-10. **Bookmark**: Right-click a remote folder → **⭐ Add Bookmark** (alias defaults to the path). Click **⭐ Bookmarks** in the toolbar to see all bookmarks (alias + remote + path) and connect or delete
-11. **Transfers**: The queue at the bottom shows per-file and folder-level progress with live speed. Use ⏸ / ▶ / ✕ on each row (or the header buttons for all), ℹ for details (from/to/size/server), and 📂 to reveal the local file. Interrupted transfers reappear as paused after a restart — ▶ resumes from the last byte, reconnecting automatically when credentials are saved
+5. **Containers & pods**: at the root of every session, open **▣ `@containers`** to browse the host's running containers (name, runtime and image shown), or **⎈ `@pods`** to walk `namespace → pod → container`. Files inside behave like any other directory — preview, edit, upload, download, delete
+6. **Path bar**: click the empty area (or ✏️) to type a path directly — Enter navigates, Esc cancels. Use 📋 to copy the current path, or right-click the bar for **Copy Path / Paste & Go / Edit Path**
+7. **Upload**: Drag files or folders from your desktop/file manager into the app, or use the **Upload** / **Upload Folder** buttons
+8. **Download**: Select files or folders (Ctrl+click to multi-select, Shift+click for a range) → click Download, or right-click → **Download…** / **Save As…**
+9. **Copy between sessions**: right-click → **📋 Copy**, then navigate anywhere (another folder, another tab, into a container) and right-click → **📥 Paste** — or drag the selection onto a folder or onto another tab. Copies between two paths on the same host run server-side (no relay through your machine). Right-click blank space for **Paste / New Folder / Refresh**
+10. **Delete**: Right-click the selection → **🗑 Delete** — a confirmation dialog appears before anything is removed (folders are deleted recursively)
+11. **Preview & edit**: Click a text file to preview it with line numbers and soft wrap — 🗖 maximizes the pane. Click ✏️ to edit in place (paste/undo work natively), then 💾 or Ctrl+S saves back to the server; ✕ discards
+12. **Bookmark**: Right-click a remote folder → **⭐ Add Bookmark** (alias defaults to the path; container/pod paths work too). Click **⭐ Bookmarks** in the toolbar to see all bookmarks (alias + remote + path) and connect or delete
+13. **Transfers**: The queue at the bottom shows per-file and folder-level progress with live speed. Use ⏸ / ▶ / ✕ on each row (or the header buttons for all), ℹ for details (from/to/size/server), and 📂 to reveal the local file. Interrupted transfers reappear as paused after a restart — ▶ resumes from the last byte, reconnecting automatically when credentials are saved
+
+### Container & pod access notes
+
+- **SSH hosts**: containers are accessed through their rootfs on the host when possible (docker `MergedDir`, containerd runtime v2 task dirs — requires read permission, typically root). This works even for distroless/scratch images. Otherwise access falls back to `docker/nerdctl/crictl exec` + shell tools inside the container
+- **Pods**: listed and accessed via `kubectl` on the host (or locally) — needs kubeconfig and `pods/exec` RBAC, no node access required
+- **Distroless pods** without shell tools can't be accessed via exec; browse them through their node's `@containers` instead
 
 ### Configuration
 
@@ -159,6 +171,10 @@ GitHub Actions builds installers for all platforms and publishes them to a GitHu
 - [x] Editable path bar (copy / paste & go / direct input)
 - [x] File quick-edit (remote, with line numbers and maximize)
 - [x] Delete files/folders (recursive, with confirmation)
+- [x] Local sessions (browse this machine without SSH)
+- [x] Container file access (`/@containers` — docker / nerdctl / crictl, rootfs or exec)
+- [x] K8s pod file access (`/@pods` — kubectl exec, namespace → pod → container)
+- [x] Any-to-any copy (Copy/Paste + drag & drop across sessions, server-side fast path)
 - [ ] SSH agent forwarding
 - [ ] Integrated SSH terminal
 - [ ] Proxy support (SOCKS5/HTTP)
