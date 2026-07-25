@@ -16,6 +16,7 @@ A fast, lightweight, cross-platform SFTP/SCP GUI built with **Tauri 2 + Vue 3 + 
 - ✏️ **Remote Quick-Edit** — Edit text files in place (paste/undo, Ctrl+S) and save straight back to the server
 - 🖱️ **Drag & Drop Upload** — Drag files or folders from your OS file manager to upload
 - ⬇️ **Flexible Download** — Toolbar download, right-click **Download…** / **Save As…** context menu
+- 🗑️ **Delete with Confirmation** — Right-click → **Delete** removes selected files or folders (recursive) after a native confirmation dialog
 - 🗂️ **Directory Transfers** — Recursive folder upload/download/save-as, shown as an expandable tree in the queue
 - ⏯️ **Pause / Resume / Cancel** — Per file, per folder, or all at once; resume continues from the transferred offset
 - 🔁 **Resume After Restart** — Interrupted transfers persist and come back as paused; resume auto-reconnects using saved credentials and opens the matching tab
@@ -109,9 +110,10 @@ ShuttleSFTP/
 5. **Path bar**: click the empty area (or ✏️) to type a path directly — Enter navigates, Esc cancels. Use 📋 to copy the current path, or right-click the bar for **Copy Path / Paste & Go / Edit Path**
 6. **Upload**: Drag files or folders from your desktop/file manager into the app, or use the **Upload** / **Upload Folder** buttons
 7. **Download**: Select files or folders (Ctrl+click to multi-select, Shift+click for a range) → click Download, or right-click → **Download…** / **Save As…**
-8. **Preview & edit**: Click a text file to preview it with line numbers and soft wrap — 🗖 maximizes the pane. Click ✏️ to edit in place (paste/undo work natively), then 💾 or Ctrl+S saves back to the server; ✕ discards
-9. **Bookmark**: Right-click a remote folder → **⭐ Add Bookmark** (alias defaults to the path). Click **⭐ Bookmarks** in the toolbar to see all bookmarks (alias + remote + path) and connect or delete
-10. **Transfers**: The queue at the bottom shows per-file and folder-level progress with live speed. Use ⏸ / ▶ / ✕ on each row (or the header buttons for all), ℹ for details (from/to/size/server), and 📂 to reveal the local file. Interrupted transfers reappear as paused after a restart — ▶ resumes from the last byte, reconnecting automatically when credentials are saved
+8. **Delete**: Right-click the selection → **🗑 Delete** — a confirmation dialog appears before anything is removed (folders are deleted recursively)
+9. **Preview & edit**: Click a text file to preview it with line numbers and soft wrap — 🗖 maximizes the pane. Click ✏️ to edit in place (paste/undo work natively), then 💾 or Ctrl+S saves back to the server; ✕ discards
+10. **Bookmark**: Right-click a remote folder → **⭐ Add Bookmark** (alias defaults to the path). Click **⭐ Bookmarks** in the toolbar to see all bookmarks (alias + remote + path) and connect or delete
+11. **Transfers**: The queue at the bottom shows per-file and folder-level progress with live speed. Use ⏸ / ▶ / ✕ on each row (or the header buttons for all), ℹ for details (from/to/size/server), and 📂 to reveal the local file. Interrupted transfers reappear as paused after a restart — ▶ resumes from the last byte, reconnecting automatically when credentials are saved
 
 ### Configuration
 
@@ -151,6 +153,7 @@ GitHub Actions builds installers for all platforms and publishes them to a GitHu
 - [x] Multi-select (Ctrl+click / Shift+click range)
 - [x] Editable path bar (copy / paste & go / direct input)
 - [x] File quick-edit (remote, with line numbers and maximize)
+- [x] Delete files/folders (recursive, with confirmation)
 - [ ] SSH agent forwarding
 - [ ] Integrated SSH terminal
 - [ ] Proxy support (SOCKS5/HTTP)
