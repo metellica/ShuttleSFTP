@@ -24,7 +24,7 @@ const dragOver = ref(false)
 const selectedPaths = ref<Set<string>>(new Set())
 /** Anchor for shift+click range selection (colIndex is null in list view). */
 const selectionAnchor = ref<{ colIndex: number | null; path: string } | null>(null)
-const columnsEl = ref<HTMLElement | null>(null)
+const bodyEl = ref<HTMLElement | null>(null)
 
 type ViewMode = 'columns' | 'list'
 const viewMode = ref<ViewMode>(
@@ -249,7 +249,30 @@ async function buildColumns(path: string) {
     dirs.push(acc)
   }
 
-  const loaded = await Promise.all(dirs.map((d) => loadColumn(d)))
+  let loaded = await Promise.all(dirs.map((d) => loadColumn(d)))
+
+  // If the last segment is actually a file (e.g. a file path typed/pasted in
+  // the path bar), don't show a broken empty column for it: select it in its
+  // parent column and open the preview instead.
+  if (loaded.length >= 2) {
+    const parent = loaded[loaded.length - 2]
+    const lastPath = dirs[dirs.length - 1]
+    const fileEntry = parent?.entries.find((e) => e.path === lastPath && !e.isDir)
+    if (parent && fileEntry) {
+      loaded = loaded.slice(0, -1)
+      dirs.pop()
+      parent.selectedPath = fileEntry.path
+      selectedPaths.value.clear()
+      selectedPaths.value.add(fileEntry.path)
+      selectionAnchor.value = { colIndex: loaded.length - 1, path: fileEntry.path }
+      if (tabsStore.activeTab && tabsStore.activeTab.currentPath !== parent.path) {
+        suppressWatch = true
+        tabsStore.updateTab(tabsStore.activeTab.id, { currentPath: parent.path })
+      }
+      loadPreview(fileEntry)
+    }
+  }
+
   // Mark each column's selected entry to point at the next directory
   for (let i = 0; i < loaded.length - 1; i++) {
     const col = loaded[i]
@@ -262,7 +285,7 @@ async function buildColumns(path: string) {
 
 function scrollToEnd() {
   requestAnimationFrame(() => {
-    columnsEl.value?.scrollTo({ left: columnsEl.value.scrollWidth, behavior: 'smooth' })
+    bodyEl.value?.scrollTo({ left: bodyEl.value.scrollWidth, behavior: 'smooth' })
   })
 }
 
@@ -272,7 +295,24 @@ async function loadList(path: string) {
   try {
     listEntries.value = sortEntries(await listDir(sessionId.value, path))
   } catch (e) {
-    console.error('Failed to list directory:', e)
+    // The path may point at a file: fall back to its parent and preview it
+    const parentDir = path.slice(0, path.lastIndexOf('/')) || '/'
+    try {
+      const entries = sortEntries(await listDir(sessionId.value, parentDir))
+      const fileEntry = entries.find((en) => en.path === path && !en.isDir)
+      if (!fileEntry) throw e
+      listEntries.value = entries
+      selectedPaths.value.clear()
+      selectedPaths.value.add(fileEntry.path)
+      selectionAnchor.value = { colIndex: null, path: fileEntry.path }
+      if (tabsStore.activeTab && tabsStore.activeTab.currentPath !== parentDir) {
+        suppressWatch = true
+        tabsStore.updateTab(tabsStore.activeTab.id, { currentPath: parentDir })
+      }
+      loadPreview(fileEntry)
+    } catch {
+      console.error('Failed to list directory:', e)
+    }
   } finally {
     listLoading.value = false
   }
@@ -766,9 +806,9 @@ watch(viewMode, () => {
       </div>
     </div>
 
-    <div class="body">
+    <div class="body" ref="bodyEl">
       <!-- Finder-style Miller columns -->
-      <div v-if="viewMode === 'columns'" v-show="!previewMaximized" class="columns" ref="columnsEl">
+      <div v-if="viewMode === 'columns'" v-show="!previewMaximized" class="columns">
         <div v-for="(col, colIndex) in columns" :key="col.path" class="column">
           <div v-if="col.loading" class="col-loading">Loading...</div>
           <template v-else>
@@ -1070,15 +1110,14 @@ watch(viewMode, () => {
 .body {
   flex: 1;
   display: flex;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
   background: #181825;
 }
 
 .columns {
-  flex: 1;
   display: flex;
-  overflow-x: auto;
-  overflow-y: hidden;
+  flex-shrink: 0;
   background: #181825;
 }
 
