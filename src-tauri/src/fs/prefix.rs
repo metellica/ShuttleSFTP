@@ -54,6 +54,14 @@ impl RemoteFs for PrefixFs {
         self.inner.supports_resume()
     }
 
+    fn server_read_cmd(&self, path: &str) -> Option<String> {
+        self.inner.server_read_cmd(&self.to_inner(path))
+    }
+
+    fn server_write_cmd(&self, path: &str) -> Option<String> {
+        self.inner.server_write_cmd(&self.to_inner(path))
+    }
+
     async fn stat(&self, path: &str) -> AppResult<FileStat> {
         self.inner.stat(&self.to_inner(path)).await
     }

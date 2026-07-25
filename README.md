@@ -8,9 +8,10 @@ A fast, lightweight, cross-platform SFTP/SCP GUI built with **Tauri 2 + Vue 3 + 
 ## Features
 
 - 🚀 **High Performance** — Async Rust backend powered by `russh` + `tokio`
-- ▣ **Container File Access** — Browse, edit and transfer files inside Docker / containerd / CRI containers, on this machine or on any SSH host (engine reached through the existing SSH connection)
-- ⎈ **K8s Pod File Access** — Pick context → namespace → pod → container and browse its files via `kubectl exec` (only needs kubeconfig + `pods/exec` RBAC; kubectl can also run on a remote host)
-- 🧱 **Distroless-Proof Rootfs Mode** — On hosts you can SSH into, containers are browsed directly through their rootfs on the host (docker `MergedDir` / containerd runtime v2 task dirs), so images without a shell or `tar` still work; falls back to exec+shell automatically
+- ▣ **Container File Access** — Every host session (SSH or local) exposes its running Docker / containerd / CRI containers as a virtual `/@containers` directory: browse in, edit and transfer files like any other folder
+- ⎈ **K8s Pod File Access** — The `/@pods` virtual directory walks `namespace → pod → container` via `kubectl exec` (only needs kubeconfig + `pods/exec` RBAC on the host running kubectl)
+- 💻 **Local Sessions** — Open "This Machine" to browse local files plus your local Docker Desktop / nerdctl containers, no SSH required
+- 🧱 **Distroless-Proof Rootfs Mode** — On SSH hosts, containers are accessed directly through their rootfs on the host (docker `MergedDir` / containerd runtime v2 task dirs), so images without a shell or `tar` still work; falls back to exec+shell automatically
 - ⇄ **Any-to-Any Transfers** — Copy files between any two endpoints (local ⇄ host ⇄ container ⇄ pod) via right-click **Copy to** or by dragging files onto another tab; same-host copies run server-side without relaying through your machine
 - 📁 **Finder-Style Browser** — macOS Finder-like Miller columns with clickable breadcrumb path bar
 - 🧭 **Editable Path Bar** — Copy the current path, paste & go, or click to type a path directly

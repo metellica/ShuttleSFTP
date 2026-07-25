@@ -321,9 +321,12 @@ pub async fn transfer_remote(
     session_manager: State<'_, SessionManager>,
     transfer_engine: State<'_, TransferEngine>,
 ) -> AppResult<Vec<String>> {
-    if src_session_id == dst_session_id {
+    if src_session_id == dst_session_id && src_paths.iter().any(|p| {
+        let name = p.rsplit('/').next().unwrap_or("");
+        format!("{}/{}", dst_dir.trim_end_matches('/'), name) == *p
+    }) {
         return Err(AppError::TransferError(
-            "Source and destination are the same session".into(),
+            "Source and destination are the same file".into(),
         ));
     }
     let src_session = session_manager.get_session(&src_session_id).await?;

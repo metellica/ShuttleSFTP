@@ -25,7 +25,24 @@ function folder(dir: string, name: string): FileEntry {
 }
 
 const fs: Record<string, FileEntry[]> = {}
-fs['/'] = [folder('/', 'data'), ...Array.from({ length: 30 }, (_, i) => folder('/', `root${i}`))]
+fs['/'] = [
+  folder('/', 'data'),
+  folder('/', '@containers'),
+  folder('/', '@pods'),
+  ...Array.from({ length: 30 }, (_, i) => folder('/', `root${i}`)),
+]
+fs['/@containers'] = [folder('/@containers', 'redis'), folder('/@containers', 'nginx-app')]
+fs['/@containers/redis'] = [
+  folder('/@containers/redis', 'data'),
+  file('/@containers/redis', 'redis.conf', 4321),
+]
+fs['/@containers/redis/data'] = [file('/@containers/redis/data', 'dump.rdb', 123456)]
+fs['/@pods'] = [folder('/@pods', 'default'), folder('/@pods', 'kube-system')]
+fs['/@pods/default'] = [folder('/@pods/default', 'nginx-7d4')]
+fs['/@pods/default/nginx-7d4'] = [folder('/@pods/default/nginx-7d4', 'nginx')]
+fs['/@pods/default/nginx-7d4/nginx'] = [
+  file('/@pods/default/nginx-7d4/nginx', 'nginx.conf', 2100),
+]
 fs['/data'] = [
   folder('/data', 'jenkins'),
   ...Array.from({ length: 10 }, (_, i) => folder('/data', `d${i}`)),
@@ -106,34 +123,5 @@ export const saveBookmark = async () => {}
 export const deleteBookmark = async () => {}
 
 // Container / pod / cross-session additions
-export const connectContainer = async () => 'mock-container-session'
-export const connectPod = async () => 'mock-pod-session'
-export const listContainers = async () => [
-  {
-    id: 'abc123def456',
-    name: 'redis',
-    image: 'redis:7',
-    state: 'Up 3 hours',
-    runtime: 'docker' as const,
-  },
-  {
-    id: '789xyz000111',
-    name: 'nginx-7d4-app',
-    image: 'nginx:1.27',
-    state: 'running',
-    runtime: 'crictl' as const,
-    pod: 'nginx-7d4',
-  },
-]
-export const listKubeContexts = async () => ['prod', 'staging']
-export const listKubeNamespaces = async () => ['default', 'kube-system']
-export const listKubePods = async (namespace: string) => [
-  {
-    name: 'nginx-7d4',
-    namespace,
-    node: 'node-1',
-    phase: 'Running',
-    containers: ['nginx', 'sidecar'],
-  },
-]
+export const connectLocal = async () => 'mock-local-session'
 export const transferRemote = async () => []

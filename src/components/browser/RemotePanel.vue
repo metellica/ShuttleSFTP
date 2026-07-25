@@ -647,7 +647,18 @@ const copyToTargets = computed(() =>
   )
 )
 
-const KIND_ICONS: Record<string, string> = { ssh: '⌁', container: '▣', pod: '⎈' }
+const KIND_ICONS: Record<string, string> = { ssh: '⌁', local: '💻' }
+
+/** Icons for virtual container/pod dirs, falling back to file/folder. */
+function entryIcon(e: FileEntry): string {
+  if (e.name === '@containers') return '▣'
+  if (e.name === '@pods') return '⎈'
+  if (e.path.startsWith('/@containers/') && e.path.split('/').filter(Boolean).length === 2)
+    return '▣'
+  if (e.path.startsWith('/@pods/') && e.path.split('/').filter(Boolean).length <= 4 && e.isDir)
+    return '⎈'
+  return e.isDir ? '📁' : '📄'
+}
 
 async function ctxCopyToTab(dstSessionId: string, dstDir: string) {
   hideCtxMenu()
@@ -761,20 +772,6 @@ async function ctxAddBookmark() {
     if (params.auth.passphrase) bookmark.passphrase = params.auth.passphrase
   } else if (params?.auth.type === 'password') {
     bookmark.password = params.auth.password
-  }
-  if (tab.kind === 'container' && tab.containerSpec) {
-    bookmark.container = {
-      runtime: tab.containerSpec.runtime,
-      containerId: tab.containerSpec.containerId,
-      name: tab.containerSpec.name,
-    }
-  } else if (tab.kind === 'pod' && tab.podSpec) {
-    bookmark.pod = {
-      context: tab.podSpec.context,
-      namespace: tab.podSpec.namespace,
-      pod: tab.podSpec.pod,
-      container: tab.podSpec.container,
-    }
   }
 
   try {
@@ -917,7 +914,7 @@ watch(viewMode, () => {
               @click="onEntryClick(colIndex, entry, $event)"
               @contextmenu.prevent="onEntryContextMenu(colIndex, entry, $event)"
             >
-              <span class="entry-icon">{{ entry.isDir ? '📁' : '📄' }}</span>
+              <span class="entry-icon">{{ entryIcon(entry) }}</span>
               <span class="entry-name" :title="entry.name">{{ entry.name }}</span>
               <span v-if="!entry.isDir" class="entry-size">{{ formatSize(entry.size) }}</span>
               <span v-else class="entry-arrow">›</span>
@@ -949,7 +946,7 @@ watch(viewMode, () => {
             @contextmenu.prevent="onListContextMenu(entry, $event)"
           >
             <span class="col-name">
-              <span class="entry-icon">{{ entry.isDir ? '📁' : '📄' }}</span>
+              <span class="entry-icon">{{ entryIcon(entry) }}</span>
               {{ entry.name }}
             </span>
             <span class="col-size">{{ entry.isDir ? '-' : formatSize(entry.size) }}</span>

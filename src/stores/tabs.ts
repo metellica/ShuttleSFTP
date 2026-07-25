@@ -1,11 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type {
-  ConnectParams,
-  SessionKind,
-  ContainerConnectSpec,
-  PodConnectSpec,
-} from '@/types/connection'
+import type { ConnectParams, SessionKind } from '@/types/connection'
 
 export interface Tab {
   id: string
@@ -17,10 +12,6 @@ export interface Tab {
   kind: SessionKind
   /** Params used to establish the SSH leg; needed for bookmarking. */
   connectParams: ConnectParams | null
-  /** Container target when kind === 'container' (for bookmarking). */
-  containerSpec: ContainerConnectSpec | null
-  /** Pod target when kind === 'pod' (for bookmarking). */
-  podSpec: PodConnectSpec | null
 }
 
 export const useTabsStore = defineStore('tabs', () => {
@@ -41,8 +32,6 @@ export const useTabsStore = defineStore('tabs', () => {
       currentPath: '/',
       kind: 'ssh',
       connectParams: null,
-      containerSpec: null,
-      podSpec: null,
     }
     tabs.value.push(tab)
     activeTabId.value = id

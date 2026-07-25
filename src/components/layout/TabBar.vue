@@ -4,11 +4,11 @@ import { useTabsStore, type Tab } from '@/stores/tabs'
 import { useTransferStore } from '@/stores/transfer'
 import { transferRemote } from '@/composables/useTauri'
 
-const emit = defineEmits<{ 'new-tab': []; 'browse-containers': [tab: Tab] }>()
+const emit = defineEmits<{ 'new-tab': [] }>()
 const tabsStore = useTabsStore()
 const transferStore = useTransferStore()
 
-const KIND_ICONS: Record<string, string> = { ssh: '⌁', container: '▣', pod: '⎈' }
+const KIND_ICONS: Record<string, string> = { ssh: '⌁', local: '💻' }
 
 const tabCtxMenu = ref<{ visible: boolean; x: number; y: number; tab: Tab | null }>({
   visible: false,
@@ -23,12 +23,6 @@ function onTabContextMenu(tab: Tab, event: MouseEvent) {
 
 function hideTabCtxMenu() {
   tabCtxMenu.value.visible = false
-}
-
-function ctxBrowseContainers() {
-  const tab = tabCtxMenu.value.tab
-  hideTabCtxMenu()
-  if (tab) emit('browse-containers', tab)
 }
 
 function ctxCloseTab() {
@@ -105,13 +99,6 @@ async function onTabDrop(tab: Tab, event: DragEvent) {
       :style="{ left: tabCtxMenu.x + 'px', top: tabCtxMenu.y + 'px' }"
       @click.stop
     >
-      <button
-        v-if="tabCtxMenu.tab?.kind === 'ssh' && tabCtxMenu.tab?.status === 'connected'"
-        class="ctx-item"
-        @click="ctxBrowseContainers"
-      >
-        ▣ Browse containers on this host…
-      </button>
       <button class="ctx-item" @click="ctxCloseTab">× Close Tab</button>
     </div>
   </div>

@@ -94,62 +94,6 @@ pub fn shell_join(argv: &[String]) -> String {
         .join(" ")
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn quotes_shell_args() {
-        assert_eq!(shell_quote("simple-file.txt"), "simple-file.txt");
-        assert_eq!(shell_quote("/var/log/app.log"), "/var/log/app.log");
-        assert_eq!(shell_quote("has space"), "'has space'");
-        assert_eq!(shell_quote("it's"), r"'it'\''s'");
-        assert_eq!(shell_quote(""), "''");
-        assert_eq!(shell_quote("$(rm -rf /)"), "'$(rm -rf /)'");
-    }
-
-    #[test]
-    fn joins_argv() {
-        let argv = vec!["docker".to_string(), "exec".into(), "a b".into()];
-        assert_eq!(shell_join(&argv), "docker exec 'a b'");
-    }
-
-    #[tokio::test]
-    async fn local_runner_runs_and_streams() {
-        let runner = LocalRunner;
-        // `run` with stdin capture (cmd on Windows, sh elsewhere)
-        #[cfg(windows)]
-        let argv = argv(&["cmd", "/c", "findstr", "x"]);
-        #[cfg(not(windows))]
-        let argv = argv(&["grep", "x"]);
-        let out = runner
-            .run(&argv, Some(b"axc\nbyd\n".to_vec()))
-            .await
-            .unwrap();
-        assert!(out.success());
-        assert!(out.stdout_string().contains("axc"));
-
-        // `spawn` echoes matching stdin lines to stdout
-        #[cfg(windows)]
-        let argv2 = super::argv(&["cmd", "/c", "findstr", "hello"]);
-        #[cfg(not(windows))]
-        let argv2 = super::argv(&["cat"]);
-        let mut stream = runner.spawn(&argv2).await.unwrap();
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        stream.stdin.write_all(b"hello\r\n").await.unwrap();
-        stream.stdin.shutdown().await.unwrap();
-        // Dropping stdin is what delivers EOF to the child on Windows
-        let closed: Box<dyn tokio::io::AsyncWrite + Send + Unpin> =
-            Box::new(tokio::io::sink());
-        drop(std::mem::replace(&mut stream.stdin, closed));
-        let mut buf = String::new();
-        stream.stdout.read_to_string(&mut buf).await.unwrap();
-        assert!(buf.contains("hello"));
-        let done = stream.done.await.unwrap();
-        assert_eq!(done.exit, Some(0));
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Local machine runner
 // ---------------------------------------------------------------------------
@@ -397,5 +341,61 @@ impl CommandRunner for SshRunner {
 
     fn location(&self) -> String {
         self.label.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quotes_shell_args() {
+        assert_eq!(shell_quote("simple-file.txt"), "simple-file.txt");
+        assert_eq!(shell_quote("/var/log/app.log"), "/var/log/app.log");
+        assert_eq!(shell_quote("has space"), "'has space'");
+        assert_eq!(shell_quote("it's"), r"'it'\''s'");
+        assert_eq!(shell_quote(""), "''");
+        assert_eq!(shell_quote("$(rm -rf /)"), "'$(rm -rf /)'");
+    }
+
+    #[test]
+    fn joins_argv() {
+        let argv = vec!["docker".to_string(), "exec".into(), "a b".into()];
+        assert_eq!(shell_join(&argv), "docker exec 'a b'");
+    }
+
+    #[tokio::test]
+    async fn local_runner_runs_and_streams() {
+        let runner = LocalRunner;
+        // `run` with stdin capture (cmd on Windows, sh elsewhere)
+        #[cfg(windows)]
+        let argv = argv(&["cmd", "/c", "findstr", "x"]);
+        #[cfg(not(windows))]
+        let argv = argv(&["grep", "x"]);
+        let out = runner
+            .run(&argv, Some(b"axc\nbyd\n".to_vec()))
+            .await
+            .unwrap();
+        assert!(out.success());
+        assert!(out.stdout_string().contains("axc"));
+
+        // `spawn` echoes matching stdin lines to stdout
+        #[cfg(windows)]
+        let argv2 = super::argv(&["cmd", "/c", "findstr", "hello"]);
+        #[cfg(not(windows))]
+        let argv2 = super::argv(&["cat"]);
+        let mut stream = runner.spawn(&argv2).await.unwrap();
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        stream.stdin.write_all(b"hello\r\n").await.unwrap();
+        stream.stdin.shutdown().await.unwrap();
+        // Dropping stdin is what delivers EOF to the child on Windows
+        let closed: Box<dyn tokio::io::AsyncWrite + Send + Unpin> =
+            Box::new(tokio::io::sink());
+        drop(std::mem::replace(&mut stream.stdin, closed));
+        let mut buf = String::new();
+        stream.stdout.read_to_string(&mut buf).await.unwrap();
+        assert!(buf.contains("hello"));
+        let done = stream.done.await.unwrap();
+        assert_eq!(done.exit, Some(0));
     }
 }

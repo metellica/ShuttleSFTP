@@ -1,8 +1,7 @@
-// End-to-end test of SessionManager with a real local Docker container:
-// the exact code path the `connect_container` Tauri command runs.
+// End-to-end test of a local session's virtual /@containers directory
+// against a real local Docker daemon — the exact path the UI browses.
 use shuttle_sftp::exec::{argv, CommandRunner, LocalRunner};
-use shuttle_sftp::ssh::session::{ContainerConnectSpec, SessionManager};
-use shuttle_sftp::container::RuntimeKind;
+use shuttle_sftp::ssh::session::SessionManager;
 
 async fn docker_available() -> bool {
     matches!(
@@ -12,7 +11,7 @@ async fn docker_available() -> bool {
 }
 
 #[tokio::test]
-async fn session_manager_container_lifecycle() {
+async fn local_session_virtual_container_dirs() {
     if !docker_available().await {
         eprintln!("SKIP: docker daemon not available");
         return;
@@ -31,40 +30,65 @@ async fn session_manager_container_lifecycle() {
         .await
         .unwrap();
     assert!(out.success(), "docker run failed: {}", out.stderr);
-    let cid = out.stdout_string().trim().to_string();
 
     let mgr = SessionManager::new();
-    let sid = mgr
-        .connect_container(ContainerConnectSpec {
-            runtime: RuntimeKind::Docker,
-            container_id: cid.clone(),
-            name: Some("shuttle-sm-test".into()),
-            via_session_id: None,
-            via: None,
-            prefer_rootfs: true, // no SSH leg locally -> falls back to exec
-        })
-        .await
-        .expect("connect_container");
-
-    // Browse and edit through the session's RemoteFs, like the
-    // filesystem commands do.
+    let sid = mgr.connect_local().await.expect("connect_local");
     let session = mgr.get_session(&sid).await.unwrap();
-    {
-        let s = session.lock().await;
-        assert_eq!(s.fs.kind(), "exec");
-        let entries = s.fs.list_dir("/").await.unwrap();
-        assert!(entries.iter().any(|e| e.name == "bin"));
+    let fs = { session.lock().await.fs.clone() };
 
-        s.fs.write_file("/tmp/from-session.txt", b"session write")
-            .await
-            .unwrap();
-        let head = s.fs.read_head("/tmp/from-session.txt", 100).await.unwrap();
-        assert_eq!(&head, b"session write");
-    }
+    // Root listing includes the virtual dirs
+    let root = fs.list_dir("/").await.unwrap();
+    assert!(root.iter().any(|e| e.name == "@containers" && e.is_dir));
+    assert!(root.iter().any(|e| e.name == "@pods" && e.is_dir));
+
+    // /@containers lists the running container with runtime/image info
+    let containers = fs.list_dir("/@containers").await.unwrap();
+    let c = containers
+        .iter()
+        .find(|e| e.name == "shuttle-sm-test")
+        .expect("test container listed");
+    assert!(c.is_dir);
+    assert!(c.path.starts_with("/@containers/"));
+    assert!(c.permissions.as_deref().unwrap_or("").contains("busybox"));
+
+    // Browse inside the container through the virtual path
+    let inside = fs.list_dir("/@containers/shuttle-sm-test").await.unwrap();
+    assert!(inside.iter().any(|e| e.name == "bin"));
+    // entry paths keep the virtual prefix so navigation works
+    assert!(inside
+        .iter()
+        .all(|e| e.path.starts_with("/@containers/shuttle-sm-test/")));
+
+    // Write + read a file inside the container via virtual path
+    fs.write_file("/@containers/shuttle-sm-test/tmp/vdir.txt", b"virtual dirs")
+        .await
+        .unwrap();
+    let head = fs
+        .read_head("/@containers/shuttle-sm-test/tmp/vdir.txt", 100)
+        .await
+        .unwrap();
+    assert_eq!(&head, b"virtual dirs");
+    let st = fs
+        .stat("/@containers/shuttle-sm-test/tmp/vdir.txt")
+        .await
+        .unwrap();
+    assert_eq!(st.size, 12);
+
+    // stat of virtual levels reports a directory
+    assert!(fs.stat("/@containers").await.unwrap().is_dir);
+
+    // deleting a virtual level is rejected
+    assert!(fs.remove_dir_all("/@containers").await.is_err());
+
+    // server-side copy commands are exposed for container paths
+    let read_cmd = fs.server_read_cmd("/@containers/shuttle-sm-test/tmp/vdir.txt");
+    assert!(
+        read_cmd.as_deref().unwrap_or("").contains("docker exec"),
+        "read cmd: {:?}",
+        read_cmd
+    );
 
     mgr.disconnect(&sid).await.unwrap();
-    assert!(mgr.get_session(&sid).await.is_err());
-
     let _ = LocalRunner
         .run(&argv(&["docker", "rm", "-f", "shuttle-sm-test"]), None)
         .await;

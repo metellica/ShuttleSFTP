@@ -4,16 +4,9 @@ import {
   listBookmarks,
   deleteBookmark,
   sshConnect,
-  connectContainer,
-  connectPod,
+  connectLocal,
 } from '@/composables/useTauri'
-import type {
-  Bookmark,
-  ConnectParams,
-  ConnectedMeta,
-  ContainerConnectSpec,
-  PodConnectSpec,
-} from '@/types/connection'
+import type { Bookmark, ConnectParams, ConnectedMeta } from '@/types/connection'
 
 const emit = defineEmits<{
   close: []
@@ -24,7 +17,7 @@ const bookmarks = ref<Bookmark[]>([])
 const connectingId = ref<string | null>(null)
 const error = ref('')
 
-const KIND_ICONS: Record<string, string> = { ssh: '⌁', container: '▣', pod: '⎈' }
+const KIND_ICONS: Record<string, string> = { ssh: '⌁', local: '💻' }
 
 onMounted(async () => {
   try {
@@ -55,43 +48,17 @@ function buildParams(bm: Bookmark): ConnectParams | null {
 async function connect(bm: Bookmark) {
   if (connectingId.value) return
   error.value = ''
-  const kind = bm.kind ?? 'ssh'
-  const isLocal = bm.host === 'local'
-  const params = isLocal ? null : buildParams(bm)
-  if (!isLocal && !params) return
+  const isLocal = bm.kind === 'local' || bm.host === 'local'
   connectingId.value = bm.id
   try {
-    if (kind === 'container' && bm.container) {
-      const spec: ContainerConnectSpec = {
-        runtime: bm.container.runtime,
-        containerId: bm.container.containerId,
-        name: bm.container.name,
-        via: params ?? undefined,
-        preferRootfs: true,
-      }
-      const sessionId = await connectContainer(spec)
-      const name = bm.container.name || bm.container.containerId.slice(0, 12)
-      const label = isLocal ? `▣ ${name}` : `▣ ${name} via ${bm.host}`
-      emit('connected', sessionId, label, bm.path, {
-        kind: 'container',
-        params,
-        containerSpec: spec,
-      })
-    } else if (kind === 'pod' && bm.pod) {
-      const spec: PodConnectSpec = {
-        context: bm.pod.context,
-        namespace: bm.pod.namespace,
-        pod: bm.pod.pod,
-        container: bm.pod.container,
-        via: params ?? undefined,
-      }
-      const sessionId = await connectPod(spec)
-      emit('connected', sessionId, `⎈ ${bm.pod.pod}@${bm.pod.namespace}`, bm.path, {
-        kind: 'pod',
-        params,
-        podSpec: spec,
+    if (isLocal) {
+      const sessionId = await connectLocal()
+      emit('connected', sessionId, '💻 This Machine', bm.path, {
+        kind: 'local',
+        params: null,
       })
     } else {
+      const params = buildParams(bm)
       if (!params) return
       const sessionId = await sshConnect(params)
       emit('connected', sessionId, `${bm.username}@${bm.alias}`, bm.path, {
@@ -107,13 +74,7 @@ async function connect(bm: Bookmark) {
 }
 
 function bookmarkTarget(bm: Bookmark): string {
-  if (bm.kind === 'container' && bm.container) {
-    const name = bm.container.name || bm.container.containerId.slice(0, 12)
-    return bm.host === 'local' ? name : `${name} @ ${bm.host}`
-  }
-  if (bm.kind === 'pod' && bm.pod) {
-    return `${bm.pod.pod} (${bm.pod.namespace})`
-  }
+  if (bm.kind === 'local' || bm.host === 'local') return 'This machine'
   return `${bm.username}@${bm.host}:${bm.port}`
 }
 

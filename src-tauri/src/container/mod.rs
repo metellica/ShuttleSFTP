@@ -484,6 +484,22 @@ impl RemoteFs for ExecFs {
         false
     }
 
+    fn server_read_cmd(&self, path: &str) -> Option<String> {
+        let mut argv = self.target.exec_prefix();
+        argv.push("cat".into());
+        argv.push("--".into());
+        argv.push(path.to_string());
+        Some(crate::exec::shell_join(&argv))
+    }
+
+    fn server_write_cmd(&self, path: &str) -> Option<String> {
+        let mut argv = self.target.exec_prefix();
+        argv.push("sh".into());
+        argv.push("-c".into());
+        argv.push(format!("cat > {}", crate::exec::shell_quote(path)));
+        Some(crate::exec::shell_join(&argv))
+    }
+
     async fn stat(&self, path: &str) -> AppResult<FileStat> {
         let argv = self.sh(r#"stat -c '%f|%s|%Y|%n' -- "$1""#, &[path]);
         let out = self.runner.run(&argv, None).await?.check("stat")?;

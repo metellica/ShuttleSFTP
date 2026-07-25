@@ -1,3 +1,4 @@
+pub mod host;
 pub mod local;
 pub mod prefix;
 
@@ -50,6 +51,24 @@ pub trait RemoteFs: Send + Sync {
     /// Whether reads/writes can start at a byte offset (resume support).
     fn supports_resume(&self) -> bool {
         true
+    }
+
+    /// Per-path resume capability (virtual-dir backends vary by path).
+    fn supports_resume_at(&self, _path: &str) -> bool {
+        self.supports_resume()
+    }
+
+    /// Shell command that streams this file to stdout when run on the
+    /// endpoint's host machine. Enables server-side copies that bypass
+    /// the local relay. None = not expressible as a host-side command.
+    fn server_read_cmd(&self, _path: &str) -> Option<String> {
+        None
+    }
+
+    /// Shell command that writes stdin to this file when run on the
+    /// endpoint's host machine.
+    fn server_write_cmd(&self, _path: &str) -> Option<String> {
+        None
     }
 
     async fn stat(&self, path: &str) -> AppResult<FileStat>;

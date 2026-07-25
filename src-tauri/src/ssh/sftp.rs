@@ -96,6 +96,14 @@ impl RemoteFs for SftpClient {
         "sftp"
     }
 
+    fn server_read_cmd(&self, path: &str) -> Option<String> {
+        Some(format!("cat -- {}", crate::exec::shell_quote(path)))
+    }
+
+    fn server_write_cmd(&self, path: &str) -> Option<String> {
+        Some(format!("cat > {}", crate::exec::shell_quote(path)))
+    }
+
     async fn stat(&self, path: &str) -> AppResult<FileStat> {
         let meta = self
             .sftp

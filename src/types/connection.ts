@@ -43,59 +43,13 @@ export interface SshHostEntry {
   identityFile: string | null
 }
 
-export type SessionKind = 'ssh' | 'container' | 'pod'
-
-export type RuntimeKind = 'docker' | 'nerdctl' | 'crictl' | 'kubectl'
-
-/** A running container listed by the connect dialog picker. */
-export interface ContainerInfo {
-  id: string
-  name: string
-  image: string
-  state: string
-  runtime: RuntimeKind
-  /** K8s pod this container belongs to (crictl listings). */
-  pod?: string
-}
-
-/** A pod listed by the K8s picker. */
-export interface PodInfo {
-  name: string
-  namespace: string
-  node: string | null
-  phase: string
-  containers: string[]
-}
-
-export interface ContainerConnectSpec {
-  runtime: RuntimeKind
-  containerId: string
-  name?: string
-  /** Reuse the SSH connection of an existing session (remote engine). */
-  viaSessionId?: string
-  /** Or open a dedicated SSH connection (bookmark reconnects). */
-  via?: ConnectParams
-  /** Try direct rootfs access through the host before exec+shell. */
-  preferRootfs?: boolean
-}
-
-export interface PodConnectSpec {
-  context?: string
-  namespace: string
-  pod: string
-  container?: string
-  /** Where kubectl runs: an existing session's host, or local when unset. */
-  viaSessionId?: string
-  via?: ConnectParams
-}
+export type SessionKind = 'ssh' | 'local'
 
 /** Everything App needs to record about a fresh connection. */
 export interface ConnectedMeta {
   kind: SessionKind
-  /** SSH leg params (null for local containers/pods). */
+  /** SSH leg params (null for local sessions). */
   params: ConnectParams | null
-  containerSpec?: ContainerConnectSpec
-  podSpec?: PodConnectSpec
   initialPath?: string
 }
 
@@ -111,21 +65,8 @@ export interface Bookmark {
   password?: string
   /** Present only when captured from a key connection with passphrase. */
   passphrase?: string
-  /** Remote directory this bookmark opens. */
+  /** Remote directory this bookmark opens (may point into /@containers or /@pods). */
   path: string
   /** Endpoint type; missing means classic SSH bookmark. */
   kind?: SessionKind
-  /** Container target (kind === 'container'). */
-  container?: {
-    runtime: RuntimeKind
-    containerId: string
-    name?: string
-  }
-  /** Pod target (kind === 'pod'). */
-  pod?: {
-    context?: string
-    namespace: string
-    pod: string
-    container?: string
-  }
 }

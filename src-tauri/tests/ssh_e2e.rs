@@ -153,3 +153,28 @@ async fn ssh_relay_copy_between_endpoints() {
     sftp.remove_file(&remote_path).await.unwrap();
     std::fs::remove_dir_all(&tmp).unwrap();
 }
+
+#[tokio::test]
+async fn ssh_session_exposes_virtual_dirs() {
+    let Some(params) = ssh_env() else {
+        eprintln!("SKIP: SHUTTLE_TEST_SSH_* not set");
+        return;
+    };
+    // SessionManager::connect wraps the SFTP fs in HostFs: the root
+    // listing must contain the virtual container/pod dirs.
+    let mgr = shuttle_sftp::ssh::session::SessionManager::new();
+    let sid = mgr.connect(params).await.expect("ssh connect");
+    let session = mgr.get_session(&sid).await.unwrap();
+    let fs = { session.lock().await.fs.clone() };
+
+    let root = fs.list_dir("/").await.unwrap();
+    assert!(root.iter().any(|e| e.name == "tmp"), "real dirs listed");
+    assert!(root.iter().any(|e| e.name == "@containers" && e.is_dir));
+    assert!(root.iter().any(|e| e.name == "@pods" && e.is_dir));
+
+    // Server-side copy cmd is exposed for plain host paths
+    let cmd = fs.server_read_cmd("/etc/hostname");
+    assert_eq!(cmd.as_deref(), Some("cat -- /etc/hostname"));
+
+    mgr.disconnect(&sid).await.unwrap();
+}

@@ -14,13 +14,8 @@ fn main() {
         .manage(TransferEngine::new(3))
         .invoke_handler(tauri::generate_handler![
             shuttle_sftp::commands::connection::connect,
-            shuttle_sftp::commands::connection::connect_container,
-            shuttle_sftp::commands::connection::connect_pod,
+            shuttle_sftp::commands::connection::connect_local,
             shuttle_sftp::commands::connection::disconnect,
-            shuttle_sftp::commands::connection::list_containers,
-            shuttle_sftp::commands::connection::list_kube_contexts,
-            shuttle_sftp::commands::connection::list_kube_namespaces,
-            shuttle_sftp::commands::connection::list_kube_pods,
             shuttle_sftp::commands::filesystem::list_dir,
             shuttle_sftp::commands::filesystem::mkdir,
             shuttle_sftp::commands::filesystem::remove,

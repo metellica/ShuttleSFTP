@@ -8,10 +8,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex, Semaphore};
 
 use crate::error::{AppError, AppResult};
-use crate::exec::shell_quote;
 use crate::fs::local::LocalFs;
 use crate::fs::RemoteFs;
-use crate::ssh::session::{RemoteSession, SessionAccess};
+use crate::ssh::session::RemoteSession;
 use crate::transfer::progress::{
     TaskGroup, TransferDirection, TransferProgress, TransferStatus, TransferTask,
 };
@@ -745,8 +744,8 @@ async fn record_progress(
 }
 
 /// Server-side copy command when both endpoints live on the same host
-/// machine (same SSH connection): the data never travels to this machine.
-/// Returns None when no such shortcut applies.
+/// machine (same SSH connection, or both local): the data never travels
+/// through this app's relay loop. Returns None when no shortcut applies.
 async fn server_side_copy_script(
     src: &Endpoint,
     src_path: &str,
@@ -757,43 +756,25 @@ async fn server_side_copy_script(
     else {
         return None;
     };
-    // Lock one session at a time (fixed order per call) to avoid deadlocks
-    // between concurrent transfers holding the locks in opposite order.
+    // Lock one session at a time (never both) to avoid deadlocks between
+    // concurrent transfers locking in opposite order.
     let (src_ssh, runner, read_cmd) = {
         let s = s.lock().await;
-        let ssh = s.ssh.clone()?;
-        let runner = s.runner.clone()?;
-        let read_cmd = match (&s.access, s.host_side_path(src_path)) {
-            (_, Some(host_path)) => format!("cat -- {}", shell_quote(&host_path)),
-            (SessionAccess::Exec { target }, None) => {
-                let mut argv = target.exec_prefix();
-                argv.push("cat".into());
-                argv.push("--".into());
-                argv.push(src_path.to_string());
-                crate::exec::shell_join(&argv)
-            }
-            _ => return None,
-        };
-        (ssh, runner, read_cmd)
+        let read_cmd = s.fs.server_read_cmd(src_path)?;
+        (s.ssh.clone(), s.runner.clone(), read_cmd)
     };
     let write_cmd = {
         let d = d.lock().await;
-        // Both must run commands on the same machine over the same connection.
-        match &d.ssh {
-            Some(dst_ssh) if Arc::ptr_eq(&src_ssh, dst_ssh) => {}
-            _ => return None,
+        // Same machine = same SSH connection, or both sessions local.
+        let same_machine = match (&src_ssh, &d.ssh) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same_machine {
+            return None;
         }
-        match (&d.access, d.host_side_path(dst_path)) {
-            (_, Some(host_path)) => format!("cat > {}", shell_quote(&host_path)),
-            (SessionAccess::Exec { target }, None) => {
-                let mut argv = target.exec_prefix();
-                argv.push("sh".into());
-                argv.push("-c".into());
-                argv.push(format!("cat > {}", shell_quote(dst_path)));
-                crate::exec::shell_join(&argv)
-            }
-            _ => return None,
-        }
+        d.fs.server_write_cmd(dst_path)?
     };
     Some((runner, format!("{} | {}", read_cmd, write_cmd)))
 }
@@ -820,7 +801,10 @@ async fn run_copy(
         map.get(task_id).map(|t| t.transferred_bytes).unwrap_or(0)
     };
     let mut offset = 0u64;
-    if resume_hint > 0 && src_fs.supports_resume() && dst_fs.supports_resume() {
+    if resume_hint > 0
+        && src_fs.supports_resume_at(src_path)
+        && dst_fs.supports_resume_at(dst_path)
+    {
         if let Ok(meta) = dst_fs.stat(dst_path).await {
             offset = meta.size.min(total);
         }
