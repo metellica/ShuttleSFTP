@@ -8,6 +8,10 @@ A fast, lightweight, cross-platform SFTP/SCP GUI built with **Tauri 2 + Vue 3 + 
 ## Features
 
 - 🚀 **High Performance** — Async Rust backend powered by `russh` + `tokio`
+- ▣ **Container File Access** — Browse, edit and transfer files inside Docker / containerd / CRI containers, on this machine or on any SSH host (engine reached through the existing SSH connection)
+- ⎈ **K8s Pod File Access** — Pick context → namespace → pod → container and browse its files via `kubectl exec` (only needs kubeconfig + `pods/exec` RBAC; kubectl can also run on a remote host)
+- 🧱 **Distroless-Proof Rootfs Mode** — On hosts you can SSH into, containers are browsed directly through their rootfs on the host (docker `MergedDir` / containerd runtime v2 task dirs), so images without a shell or `tar` still work; falls back to exec+shell automatically
+- ⇄ **Any-to-Any Transfers** — Copy files between any two endpoints (local ⇄ host ⇄ container ⇄ pod) via right-click **Copy to** or by dragging files onto another tab; same-host copies run server-side without relaying through your machine
 - 📁 **Finder-Style Browser** — macOS Finder-like Miller columns with clickable breadcrumb path bar
 - 🧭 **Editable Path Bar** — Copy the current path, paste & go, or click to type a path directly
 - 🗒️ **Details View** — Windows Explorer-style list view (size, permissions, modified time), toggleable

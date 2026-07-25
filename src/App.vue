@@ -12,12 +12,15 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { uploadFiles, downloadFiles, mkDir } from '@/composables/useTauri'
 import { useTransferStore } from '@/stores/transfer'
 import type { TransferProgress, TransferTask } from '@/types/transfer'
-import type { ConnectParams } from '@/types/connection'
+import type { ConnectedMeta } from '@/types/connection'
+import type { Tab } from '@/stores/tabs'
 
 const tabsStore = useTabsStore()
 const transferStore = useTransferStore()
 const showConnectDialog = ref(false)
 const showBookmarksDialog = ref(false)
+const connectDialogMode = ref<'ssh' | 'container' | 'pod'>('ssh')
+const connectDialogVia = ref<string | undefined>(undefined)
 const remotePanelRef = ref<InstanceType<typeof RemotePanel> | null>(null)
 const unlisteners: UnlistenFn[] = []
 
@@ -68,17 +71,37 @@ onUnmounted(() => {
 
 function onNewTab() {
   tabsStore.addTab()
+  connectDialogMode.value = 'ssh'
+  connectDialogVia.value = undefined
   showConnectDialog.value = true
 }
 
-function onConnected(sessionId: string, label: string, params: ConnectParams) {
+function onShowConnect() {
+  connectDialogMode.value = 'ssh'
+  connectDialogVia.value = undefined
+  showConnectDialog.value = true
+}
+
+/** Tab context menu: browse containers running on an SSH host. */
+function onBrowseContainers(tab: Tab) {
+  if (!tab.sessionId) return
+  connectDialogMode.value = 'container'
+  connectDialogVia.value = tab.sessionId
+  tabsStore.addTab()
+  showConnectDialog.value = true
+}
+
+function onConnected(sessionId: string, label: string, meta: ConnectedMeta) {
   if (tabsStore.activeTab) {
     tabsStore.updateTab(tabsStore.activeTab.id, {
       sessionId,
       label,
       status: 'connected',
-      currentPath: '/',
-      connectParams: params,
+      currentPath: meta.initialPath ?? '/',
+      kind: meta.kind,
+      connectParams: meta.params,
+      containerSpec: meta.containerSpec ?? null,
+      podSpec: meta.podSpec ?? null,
     })
   }
   showConnectDialog.value = false
@@ -88,7 +111,7 @@ function onBookmarkConnected(
   sessionId: string,
   label: string,
   path: string,
-  params: ConnectParams
+  meta: ConnectedMeta
 ) {
   // Reuse the active tab if it's idle, otherwise open a new one
   const tab =
@@ -100,7 +123,10 @@ function onBookmarkConnected(
     label,
     status: 'connected',
     currentPath: path,
-    connectParams: params,
+    kind: meta.kind,
+    connectParams: meta.params,
+    containerSpec: meta.containerSpec ?? null,
+    podSpec: meta.podSpec ?? null,
   })
   showBookmarksDialog.value = false
 }
@@ -192,9 +218,9 @@ async function onNewFolder() {
 
 <template>
   <div class="app-container">
-    <TabBar @new-tab="onNewTab" />
+    <TabBar @new-tab="onNewTab" @browse-containers="onBrowseContainers" />
     <Toolbar
-      @connect="showConnectDialog = true"
+      @connect="onShowConnect"
       @bookmarks="showBookmarksDialog = true"
       @upload="onUpload"
       @upload-folder="onUploadFolder"
@@ -211,6 +237,8 @@ async function onNewFolder() {
     <TransferQueue />
     <ConnectDialog
       v-if="showConnectDialog"
+      :initial-mode="connectDialogMode"
+      :via-session-id="connectDialogVia"
       @close="showConnectDialog = false"
       @connected="onConnected"
     />

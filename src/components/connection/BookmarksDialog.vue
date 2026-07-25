@@ -1,16 +1,30 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { listBookmarks, deleteBookmark, sshConnect } from '@/composables/useTauri'
-import type { Bookmark, ConnectParams } from '@/types/connection'
+import {
+  listBookmarks,
+  deleteBookmark,
+  sshConnect,
+  connectContainer,
+  connectPod,
+} from '@/composables/useTauri'
+import type {
+  Bookmark,
+  ConnectParams,
+  ConnectedMeta,
+  ContainerConnectSpec,
+  PodConnectSpec,
+} from '@/types/connection'
 
 const emit = defineEmits<{
   close: []
-  connected: [sessionId: string, label: string, path: string, params: ConnectParams]
+  connected: [sessionId: string, label: string, path: string, meta: ConnectedMeta]
 }>()
 
 const bookmarks = ref<Bookmark[]>([])
 const connectingId = ref<string | null>(null)
 const error = ref('')
+
+const KIND_ICONS: Record<string, string> = { ssh: '⌁', container: '▣', pod: '⎈' }
 
 onMounted(async () => {
   try {
@@ -41,17 +55,66 @@ function buildParams(bm: Bookmark): ConnectParams | null {
 async function connect(bm: Bookmark) {
   if (connectingId.value) return
   error.value = ''
-  const params = buildParams(bm)
-  if (!params) return
+  const kind = bm.kind ?? 'ssh'
+  const isLocal = bm.host === 'local'
+  const params = isLocal ? null : buildParams(bm)
+  if (!isLocal && !params) return
   connectingId.value = bm.id
   try {
-    const sessionId = await sshConnect(params)
-    emit('connected', sessionId, `${bm.username}@${bm.alias}`, bm.path, params)
+    if (kind === 'container' && bm.container) {
+      const spec: ContainerConnectSpec = {
+        runtime: bm.container.runtime,
+        containerId: bm.container.containerId,
+        name: bm.container.name,
+        via: params ?? undefined,
+        preferRootfs: true,
+      }
+      const sessionId = await connectContainer(spec)
+      const name = bm.container.name || bm.container.containerId.slice(0, 12)
+      const label = isLocal ? `▣ ${name}` : `▣ ${name} via ${bm.host}`
+      emit('connected', sessionId, label, bm.path, {
+        kind: 'container',
+        params,
+        containerSpec: spec,
+      })
+    } else if (kind === 'pod' && bm.pod) {
+      const spec: PodConnectSpec = {
+        context: bm.pod.context,
+        namespace: bm.pod.namespace,
+        pod: bm.pod.pod,
+        container: bm.pod.container,
+        via: params ?? undefined,
+      }
+      const sessionId = await connectPod(spec)
+      emit('connected', sessionId, `⎈ ${bm.pod.pod}@${bm.pod.namespace}`, bm.path, {
+        kind: 'pod',
+        params,
+        podSpec: spec,
+      })
+    } else {
+      if (!params) return
+      const sessionId = await sshConnect(params)
+      emit('connected', sessionId, `${bm.username}@${bm.alias}`, bm.path, {
+        kind: 'ssh',
+        params,
+      })
+    }
   } catch (e: any) {
     error.value = e?.toString() || 'Connection failed'
   } finally {
     connectingId.value = null
   }
+}
+
+function bookmarkTarget(bm: Bookmark): string {
+  if (bm.kind === 'container' && bm.container) {
+    const name = bm.container.name || bm.container.containerId.slice(0, 12)
+    return bm.host === 'local' ? name : `${name} @ ${bm.host}`
+  }
+  if (bm.kind === 'pod' && bm.pod) {
+    return `${bm.pod.pod} (${bm.pod.namespace})`
+  }
+  return `${bm.username}@${bm.host}:${bm.port}`
 }
 
 async function remove(bm: Bookmark) {
@@ -76,9 +139,12 @@ async function remove(bm: Bookmark) {
       <div v-else class="list">
         <div v-for="bm in bookmarks" :key="bm.id" class="item">
           <div class="info" @dblclick="connect(bm)">
-            <div class="alias" :title="bm.alias">{{ bm.alias }}</div>
-            <div class="detail" :title="`${bm.username}@${bm.host}:${bm.port} ${bm.path}`">
-              <span class="remote">{{ bm.username }}@{{ bm.host }}:{{ bm.port }}</span>
+            <div class="alias" :title="bm.alias">
+              <span class="kind-icon">{{ KIND_ICONS[bm.kind ?? 'ssh'] }}</span>
+              {{ bm.alias }}
+            </div>
+            <div class="detail" :title="`${bookmarkTarget(bm)} ${bm.path}`">
+              <span class="remote">{{ bookmarkTarget(bm) }}</span>
               <span class="path">{{ bm.path }}</span>
             </div>
           </div>
@@ -181,6 +247,12 @@ h2 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.kind-icon {
+  color: #a6adc8;
+  font-size: 11px;
+  margin-right: 2px;
 }
 
 .detail {

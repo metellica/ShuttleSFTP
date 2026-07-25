@@ -104,3 +104,36 @@ export const deleteProfile = async () => {}
 export const listBookmarks = async () => []
 export const saveBookmark = async () => {}
 export const deleteBookmark = async () => {}
+
+// Container / pod / cross-session additions
+export const connectContainer = async () => 'mock-container-session'
+export const connectPod = async () => 'mock-pod-session'
+export const listContainers = async () => [
+  {
+    id: 'abc123def456',
+    name: 'redis',
+    image: 'redis:7',
+    state: 'Up 3 hours',
+    runtime: 'docker' as const,
+  },
+  {
+    id: '789xyz000111',
+    name: 'nginx-7d4-app',
+    image: 'nginx:1.27',
+    state: 'running',
+    runtime: 'crictl' as const,
+    pod: 'nginx-7d4',
+  },
+]
+export const listKubeContexts = async () => ['prod', 'staging']
+export const listKubeNamespaces = async () => ['default', 'kube-system']
+export const listKubePods = async (namespace: string) => [
+  {
+    name: 'nginx-7d4',
+    namespace,
+    node: 'node-1',
+    phase: 'Running',
+    containers: ['nginx', 'sidecar'],
+  },
+]
+export const transferRemote = async () => []

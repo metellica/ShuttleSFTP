@@ -23,6 +23,16 @@ pub struct Bookmark {
     pub passphrase: Option<String>,
     /// Remote directory this bookmark opens.
     pub path: String,
+    /// Endpoint type: "ssh" (default), "container" or "pod".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Container target details (kind == "container"); stored opaquely,
+    /// interpreted by the frontend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container: Option<serde_json::Value>,
+    /// Pod target details (kind == "pod").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pod: Option<serde_json::Value>,
 }
 
 fn bookmarks_path() -> PathBuf {

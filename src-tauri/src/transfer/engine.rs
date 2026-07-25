@@ -1,22 +1,59 @@
 use std::collections::{HashMap, HashSet};
-use std::io::SeekFrom;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use russh_sftp::protocol::OpenFlags;
 use tauri::Emitter;
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex, Semaphore};
 
 use crate::error::{AppError, AppResult};
-use crate::ssh::session::SshSession;
+use crate::exec::shell_quote;
+use crate::fs::local::LocalFs;
+use crate::fs::RemoteFs;
+use crate::ssh::session::{RemoteSession, SessionAccess};
 use crate::transfer::progress::{
     TaskGroup, TransferDirection, TransferProgress, TransferStatus, TransferTask,
 };
 
 const CHUNK_SIZE: usize = 64 * 1024;
 const PROGRESS_EMIT_THRESHOLD: u64 = 256 * 1024;
+
+/// One side of a transfer: the local machine or a live session.
+#[derive(Clone)]
+pub enum Endpoint {
+    Local,
+    Session {
+        id: String,
+        session: Arc<Mutex<RemoteSession>>,
+    },
+}
+
+impl Endpoint {
+    async fn fs(&self) -> Arc<dyn RemoteFs> {
+        match self {
+            Endpoint::Local => Arc::new(LocalFs),
+            Endpoint::Session { session, .. } => session.lock().await.fs.clone(),
+        }
+    }
+
+    fn session_id(&self) -> Option<String> {
+        match self {
+            Endpoint::Local => None,
+            Endpoint::Session { id, .. } => Some(id.clone()),
+        }
+    }
+
+    async fn host_user(&self) -> (String, String) {
+        match self {
+            Endpoint::Local => ("local".into(), String::new()),
+            Endpoint::Session { session, .. } => {
+                let s = session.lock().await;
+                (s.params.host.clone(), s.params.username.clone())
+            }
+        }
+    }
+}
 
 /// How a transfer run ended (other than by error).
 enum Outcome {
@@ -82,7 +119,8 @@ fn now_millis() -> u64 {
         .unwrap_or(0)
 }
 
-/// Manages the transfer queue and executes upload/download tasks.
+/// Manages the transfer queue and executes copy tasks between any two
+/// endpoints (local machine, SSH hosts, containers, pods).
 pub struct TransferEngine {
     tasks: Arc<Mutex<HashMap<String, TransferTask>>>,
     semaphore: Arc<Semaphore>,
@@ -102,88 +140,58 @@ impl TransferEngine {
         }
     }
 
-    /// Queue an upload task and start it in the background.
-    pub async fn queue_upload(
+    /// Queue a copy between two endpoints and start it in the background.
+    pub async fn queue_transfer(
         &self,
         app: tauri::AppHandle,
-        session: Arc<Mutex<SshSession>>,
-        session_id: &str,
-        local_path: &str,
-        remote_path: &str,
+        src: Endpoint,
+        src_path: &str,
+        dst: Endpoint,
+        dst_path: &str,
         group: Option<TaskGroup>,
     ) -> AppResult<String> {
         let task_id = uuid::Uuid::new_v4().to_string();
-        let (host, username) = {
-            let sess = session.lock().await;
-            (sess.params.host.clone(), sess.params.username.clone())
+
+        let direction = match (&src, &dst) {
+            (Endpoint::Local, _) => TransferDirection::Upload,
+            (_, Endpoint::Local) => TransferDirection::Download,
+            _ => TransferDirection::Remote,
         };
+        // The "primary" session (kept in session_id for rebinding) is the
+        // remote side of up/downloads, the source for remote-remote copies.
+        let primary = match direction {
+            TransferDirection::Upload => &dst,
+            _ => &src,
+        };
+        let (host, username) = primary.host_user().await;
+        let (dest_host, _) = dst.host_user().await;
+
         let task = TransferTask {
             id: task_id.clone(),
-            session_id: session_id.to_string(),
+            session_id: primary.session_id().unwrap_or_default(),
+            dest_session_id: dst.session_id(),
             host,
             username,
+            dest_host,
             group_id: group.as_ref().map(|g| g.id.clone()),
             group_name: group.as_ref().map(|g| g.name.clone()),
             rel_path: group.map(|g| g.rel_path),
             created_at: now_millis(),
             delete_on_cancel: false,
-            direction: TransferDirection::Upload,
-            source_path: local_path.to_string(),
-            dest_path: remote_path.to_string(),
+            direction,
+            source_path: src_path.to_string(),
+            dest_path: dst_path.to_string(),
             total_bytes: 0,
             transferred_bytes: 0,
             status: TransferStatus::Queued,
         };
         self.tasks.lock().await.insert(task_id.clone(), task);
         persist_tasks(&self.tasks).await;
-        self.spawn_transfer(app, session, task_id.clone());
+        self.spawn_transfer(app, src, dst, task_id.clone());
         Ok(task_id)
     }
 
-    /// Queue a download task and start it in the background.
-    pub async fn queue_download(
-        &self,
-        app: tauri::AppHandle,
-        session: Arc<Mutex<SshSession>>,
-        session_id: &str,
-        remote_path: &str,
-        local_path: &str,
-        group: Option<TaskGroup>,
-    ) -> AppResult<String> {
-        let task_id = uuid::Uuid::new_v4().to_string();
-        let (host, username) = {
-            let sess = session.lock().await;
-            (sess.params.host.clone(), sess.params.username.clone())
-        };
-        let task = TransferTask {
-            id: task_id.clone(),
-            session_id: session_id.to_string(),
-            host,
-            username,
-            group_id: group.as_ref().map(|g| g.id.clone()),
-            group_name: group.as_ref().map(|g| g.name.clone()),
-            rel_path: group.map(|g| g.rel_path),
-            created_at: now_millis(),
-            delete_on_cancel: false,
-            direction: TransferDirection::Download,
-            source_path: remote_path.to_string(),
-            dest_path: local_path.to_string(),
-            total_bytes: 0,
-            transferred_bytes: 0,
-            status: TransferStatus::Queued,
-        };
-        self.tasks.lock().await.insert(task_id.clone(), task);
-        persist_tasks(&self.tasks).await;
-        self.spawn_transfer(app, session, task_id.clone());
-        Ok(task_id)
-    }
-
-    fn spawn_transfer(
-        &self,
-        app: tauri::AppHandle,
-        session: Arc<Mutex<SshSession>>,
-        task_id: String,
-    ) {
+    fn spawn_transfer(&self, app: tauri::AppHandle, src: Endpoint, dst: Endpoint, task_id: String) {
         let tasks = self.tasks.clone();
         let semaphore = self.semaphore.clone();
         let running = self.running.clone();
@@ -195,11 +203,10 @@ impl TransferEngine {
                 Err(_) => return,
             };
 
-            let (direction, source, dest, group_id) = {
+            let (source, dest, group_id) = {
                 let map = tasks.lock().await;
                 match map.get(&task_id) {
                     Some(t) if t.status == TransferStatus::Queued => (
-                        t.direction.clone(),
                         t.source_path.clone(),
                         t.dest_path.clone(),
                         t.group_id.clone(),
@@ -211,14 +218,7 @@ impl TransferEngine {
             set_status(&tasks, &app, &task_id, TransferStatus::Active).await;
             running.lock().await.insert(task_id.clone());
 
-            let result = match direction {
-                TransferDirection::Upload => {
-                    run_upload(&tasks, &app, &task_id, session, &source, &dest).await
-                }
-                TransferDirection::Download => {
-                    run_download(&tasks, &app, &task_id, session, &source, &dest).await
-                }
-            };
+            let result = run_copy(&tasks, &app, &task_id, &src, &source, &dst, &dest).await;
 
             // The transfer loop has returned: its file handles are dropped.
             running.lock().await.remove(&task_id);
@@ -357,14 +357,15 @@ impl TransferEngine {
         Ok(paused)
     }
 
-    /// Resume a paused (or failed) transfer on the given session.
-    /// The transfer picks up from the destination file's current size.
+    /// Resume a paused (or failed) transfer on the given endpoints.
+    /// The transfer picks up from the destination file's current size
+    /// when both endpoints support it.
     pub async fn resume(
         &self,
         app: tauri::AppHandle,
         task_id: &str,
-        session: Arc<Mutex<SshSession>>,
-        session_id: &str,
+        src: Endpoint,
+        dst: Endpoint,
     ) -> AppResult<()> {
         {
             let mut tasks = self.tasks.lock().await;
@@ -377,7 +378,12 @@ impl TransferEngine {
                 ));
             }
             task.status = TransferStatus::Queued;
-            task.session_id = session_id.to_string();
+            let primary = match task.direction {
+                TransferDirection::Upload => &dst,
+                _ => &src,
+            };
+            task.session_id = primary.session_id().unwrap_or_default();
+            task.dest_session_id = dst.session_id();
         }
         let _ = app.emit(
             "transfer:status",
@@ -387,7 +393,7 @@ impl TransferEngine {
             },
         );
         persist_tasks(&self.tasks).await;
-        self.spawn_transfer(app, session, task_id.to_string());
+        self.spawn_transfer(app, src, dst, task_id.to_string());
         Ok(())
     }
 
@@ -738,162 +744,124 @@ async fn record_progress(
     );
 }
 
-async fn run_upload(
-    tasks: &TaskMap,
-    app: &tauri::AppHandle,
-    task_id: &str,
-    session: Arc<Mutex<SshSession>>,
-    local_path: &str,
-    remote_path: &str,
-) -> AppResult<Outcome> {
-    let total = tokio::fs::metadata(local_path)
-        .await
-        .map_err(|e| AppError::TransferError(format!("Cannot stat local file: {}", e)))?
-        .len();
-
-    // A non-zero transferred count means this task is being resumed.
-    let resume_hint = {
-        let map = tasks.lock().await;
-        map.get(task_id).map(|t| t.transferred_bytes).unwrap_or(0)
+/// Server-side copy command when both endpoints live on the same host
+/// machine (same SSH connection): the data never travels to this machine.
+/// Returns None when no such shortcut applies.
+async fn server_side_copy_script(
+    src: &Endpoint,
+    src_path: &str,
+    dst: &Endpoint,
+    dst_path: &str,
+) -> Option<(Arc<dyn crate::exec::CommandRunner>, String)> {
+    let (Endpoint::Session { session: s, .. }, Endpoint::Session { session: d, .. }) = (src, dst)
+    else {
+        return None;
     };
-
-    let mut local = tokio::fs::File::open(local_path)
-        .await
-        .map_err(|e| AppError::TransferError(format!("Cannot open local file: {}", e)))?;
-
-    // Open remote file while briefly holding the session lock; the returned
-    // handle operates over the SFTP channel independently afterwards.
-    // On resume, pick up from the remote file's actual size.
-    let (mut remote, offset) = {
-        let sess = session.lock().await;
-        let sftp = sess.sftp.sftp_session();
-        let mut offset = 0u64;
-        if resume_hint > 0 {
-            if let Ok(meta) = sftp.metadata(remote_path).await {
-                offset = meta.size.unwrap_or(0).min(total);
+    // Lock one session at a time (fixed order per call) to avoid deadlocks
+    // between concurrent transfers holding the locks in opposite order.
+    let (src_ssh, runner, read_cmd) = {
+        let s = s.lock().await;
+        let ssh = s.ssh.clone()?;
+        let runner = s.runner.clone()?;
+        let read_cmd = match (&s.access, s.host_side_path(src_path)) {
+            (_, Some(host_path)) => format!("cat -- {}", shell_quote(&host_path)),
+            (SessionAccess::Exec { target }, None) => {
+                let mut argv = target.exec_prefix();
+                argv.push("cat".into());
+                argv.push("--".into());
+                argv.push(src_path.to_string());
+                crate::exec::shell_join(&argv)
             }
-        }
-        let remote = if offset > 0 {
-            sftp.open_with_flags(remote_path, OpenFlags::WRITE)
-                .await
-                .map_err(|e| AppError::TransferError(format!("Cannot open remote file: {}", e)))?
-        } else {
-            sftp.create(remote_path)
-                .await
-                .map_err(|e| AppError::TransferError(format!("Cannot create remote file: {}", e)))?
+            _ => return None,
         };
-        (remote, offset)
+        (ssh, runner, read_cmd)
     };
-
-    if offset > 0 {
-        local
-            .seek(SeekFrom::Start(offset))
-            .await
-            .map_err(|e| AppError::TransferError(format!("Local seek error: {}", e)))?;
-        remote
-            .seek(SeekFrom::Start(offset))
-            .await
-            .map_err(|e| AppError::TransferError(format!("Remote seek error: {}", e)))?;
-    }
-
-    let started = Instant::now();
-    let mut buf = vec![0u8; CHUNK_SIZE];
-    let mut transferred: u64 = offset;
-    let mut last_emit: u64 = offset;
-
-    record_progress(tasks, app, task_id, transferred, total, started, offset).await;
-
-    loop {
-        if let Some(outcome) = check_control(tasks, task_id).await {
-            let _ = remote.shutdown().await;
-            record_progress(tasks, app, task_id, transferred, total, started, offset).await;
-            return Ok(outcome);
+    let write_cmd = {
+        let d = d.lock().await;
+        // Both must run commands on the same machine over the same connection.
+        match &d.ssh {
+            Some(dst_ssh) if Arc::ptr_eq(&src_ssh, dst_ssh) => {}
+            _ => return None,
         }
-        let n = local
-            .read(&mut buf)
-            .await
-            .map_err(|e| AppError::TransferError(format!("Local read error: {}", e)))?;
-        if n == 0 {
-            break;
+        match (&d.access, d.host_side_path(dst_path)) {
+            (_, Some(host_path)) => format!("cat > {}", shell_quote(&host_path)),
+            (SessionAccess::Exec { target }, None) => {
+                let mut argv = target.exec_prefix();
+                argv.push("sh".into());
+                argv.push("-c".into());
+                argv.push(format!("cat > {}", shell_quote(dst_path)));
+                crate::exec::shell_join(&argv)
+            }
+            _ => return None,
         }
-        remote
-            .write_all(&buf[..n])
-            .await
-            .map_err(|e| AppError::TransferError(format!("Remote write error: {}", e)))?;
-        transferred += n as u64;
-        if transferred - last_emit >= PROGRESS_EMIT_THRESHOLD {
-            last_emit = transferred;
-            record_progress(tasks, app, task_id, transferred, total, started, offset).await;
-        }
-    }
-
-    remote
-        .shutdown()
-        .await
-        .map_err(|e| AppError::TransferError(format!("Remote close error: {}", e)))?;
-
-    record_progress(tasks, app, task_id, transferred, total, started, offset).await;
-    Ok(Outcome::Completed)
+    };
+    Some((runner, format!("{} | {}", read_cmd, write_cmd)))
 }
 
-async fn run_download(
+/// Generic streaming copy between two endpoints, with an opportunistic
+/// same-host server-side fast path.
+async fn run_copy(
     tasks: &TaskMap,
     app: &tauri::AppHandle,
     task_id: &str,
-    session: Arc<Mutex<SshSession>>,
-    remote_path: &str,
-    local_path: &str,
+    src: &Endpoint,
+    src_path: &str,
+    dst: &Endpoint,
+    dst_path: &str,
 ) -> AppResult<Outcome> {
-    let (total, mut remote) = {
-        let sess = session.lock().await;
-        let sftp = sess.sftp.sftp_session();
-        let meta = sftp
-            .metadata(remote_path)
-            .await
-            .map_err(|e| AppError::TransferError(format!("Cannot stat remote file: {}", e)))?;
-        let total = meta.size.unwrap_or(0);
-        let remote = sftp
-            .open(remote_path)
-            .await
-            .map_err(|e| AppError::TransferError(format!("Cannot open remote file: {}", e)))?;
-        (total, remote)
-    };
+    let src_fs = src.fs().await;
+    let dst_fs = dst.fs().await;
+
+    let total = src_fs.stat(src_path).await?.size;
 
     // A non-zero transferred count means this task is being resumed.
-    // Pick up from the local file's actual size.
     let resume_hint = {
         let map = tasks.lock().await;
         map.get(task_id).map(|t| t.transferred_bytes).unwrap_or(0)
     };
     let mut offset = 0u64;
-    if resume_hint > 0 {
-        if let Ok(meta) = tokio::fs::metadata(local_path).await {
-            offset = meta.len().min(total);
+    if resume_hint > 0 && src_fs.supports_resume() && dst_fs.supports_resume() {
+        if let Ok(meta) = dst_fs.stat(dst_path).await {
+            offset = meta.size.min(total);
         }
     }
 
-    let mut local = if offset > 0 {
-        tokio::fs::OpenOptions::new()
-            .write(true)
-            .open(local_path)
-            .await
-            .map_err(|e| AppError::TransferError(format!("Cannot open local file: {}", e)))?
-    } else {
-        tokio::fs::File::create(local_path)
-            .await
-            .map_err(|e| AppError::TransferError(format!("Cannot create local file: {}", e)))?
-    };
-
-    if offset > 0 {
-        local
-            .seek(SeekFrom::Start(offset))
-            .await
-            .map_err(|e| AppError::TransferError(format!("Local seek error: {}", e)))?;
-        remote
-            .seek(SeekFrom::Start(offset))
-            .await
-            .map_err(|e| AppError::TransferError(format!("Remote seek error: {}", e)))?;
+    // Same-host fast path: run the copy remotely, no local relay. Only for
+    // fresh transfers — it cannot resume or report incremental progress.
+    if offset == 0 {
+        if let Some((runner, script)) = server_side_copy_script(src, src_path, dst, dst_path).await
+        {
+            if let Some(outcome) = check_control(tasks, task_id).await {
+                return Ok(outcome);
+            }
+            let started = Instant::now();
+            record_progress(tasks, app, task_id, 0, total, started, 0).await;
+            log::info!("Transfer {} using server-side copy: {}", task_id, script);
+            let argv = vec!["sh".to_string(), "-c".into(), script];
+            let out = runner.run(&argv, None).await?;
+            if !out.success() {
+                return Err(AppError::TransferError(format!(
+                    "Server-side copy failed (exit {}): {}",
+                    out.exit.unwrap_or(0),
+                    out.stderr.trim()
+                )));
+            }
+            // Verify the destination size matches the source.
+            let written = dst_fs.stat(dst_path).await?.size;
+            if written != total {
+                return Err(AppError::TransferError(format!(
+                    "Server-side copy size mismatch: {} of {} bytes",
+                    written, total
+                )));
+            }
+            record_progress(tasks, app, task_id, total, total, started, 0).await;
+            return Ok(Outcome::Completed);
+        }
     }
+
+    let reader = src_fs.open_read(src_path, offset).await?;
+    let mut remote_reader = reader.reader;
+    let mut writer = dst_fs.open_write(dst_path, offset).await?;
 
     let started = Instant::now();
     let mut buf = vec![0u8; CHUNK_SIZE];
@@ -904,21 +872,21 @@ async fn run_download(
 
     loop {
         if let Some(outcome) = check_control(tasks, task_id).await {
-            let _ = local.flush().await;
+            let _ = writer.flush().await;
             record_progress(tasks, app, task_id, transferred, total, started, offset).await;
             return Ok(outcome);
         }
-        let n = remote
+        let n = remote_reader
             .read(&mut buf)
             .await
-            .map_err(|e| AppError::TransferError(format!("Remote read error: {}", e)))?;
+            .map_err(|e| AppError::TransferError(format!("Read error: {}", e)))?;
         if n == 0 {
             break;
         }
-        local
+        writer
             .write_all(&buf[..n])
             .await
-            .map_err(|e| AppError::TransferError(format!("Local write error: {}", e)))?;
+            .map_err(|e| AppError::TransferError(format!("Write error: {}", e)))?;
         transferred += n as u64;
         if transferred - last_emit >= PROGRESS_EMIT_THRESHOLD {
             last_emit = transferred;
@@ -926,10 +894,16 @@ async fn run_download(
         }
     }
 
-    local
-        .flush()
-        .await
-        .map_err(|e| AppError::TransferError(format!("Local flush error: {}", e)))?;
+    writer.finish().await?;
+
+    // Streams without an out-of-band error channel (exec-based backends)
+    // surface failures as truncated data: verify the byte count.
+    if transferred < total {
+        return Err(AppError::TransferError(format!(
+            "Source stream ended early: {} of {} bytes",
+            transferred, total
+        )));
+    }
 
     record_progress(tasks, app, task_id, transferred, total, started, offset).await;
     Ok(Outcome::Completed)

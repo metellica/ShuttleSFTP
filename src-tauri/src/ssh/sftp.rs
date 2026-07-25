@@ -1,97 +1,33 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use russh::keys::key::PrivateKeyWithHashAlg;
-use russh::keys::*;
+use async_trait::async_trait;
 use russh_sftp::client::SftpSession;
-use serde::{Deserialize, Serialize};
+use russh_sftp::protocol::OpenFlags;
+use tokio::io::{AsyncSeekExt, AsyncWrite, AsyncWriteExt};
 
 use crate::error::{AppError, AppResult};
-use crate::ssh::auth::AuthMethod;
+use crate::fs::{FileEntry, FileStat, FsReader, FsWriter, RemoteFs};
+use crate::ssh::client::SshHandle;
 use crate::ssh::session::ConnectParams;
 
-/// File entry returned to the frontend.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FileEntry {
-    pub name: String,
-    pub path: String,
-    pub is_dir: bool,
-    pub size: u64,
-    pub modified: u64,
-    pub permissions: Option<String>,
-}
-
-/// Wraps an SFTP session for file operations.
+/// Wraps an SFTP session for file operations. Holds the underlying SSH
+/// connection handle so exec channels (containers, tunnels) can be derived
+/// from the same connection.
 pub struct SftpClient {
-    #[allow(dead_code)]
-    session: russh::client::Handle<ClientHandler>,
+    session: Arc<SshHandle>,
     sftp: SftpSession,
-}
-
-/// Minimal russh client handler.
-struct ClientHandler;
-
-impl russh::client::Handler for ClientHandler {
-    type Error = russh::Error;
-
-    fn check_server_key(
-        &mut self,
-        _server_public_key: &russh::keys::ssh_key::PublicKey,
-    ) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send {
-        // TODO: Verify against known_hosts in production
-        async { Ok(true) }
-    }
 }
 
 impl SftpClient {
     /// Establish an SSH connection and open an SFTP channel.
     pub async fn connect(params: &ConnectParams) -> AppResult<Self> {
-        let config = Arc::new(russh::client::Config::default());
-        let handler = ClientHandler;
+        let session = crate::ssh::client::connect_ssh(params).await?;
+        Self::open(session).await
+    }
 
-        let mut session = russh::client::connect(config, (&*params.host, params.port), handler)
-            .await
-            .map_err(|e| AppError::ConnectionFailed(e.to_string()))?;
-
-        // Authenticate
-        let auth_result = match &params.auth {
-            AuthMethod::Password { password } => {
-                session
-                    .authenticate_password(&params.username, password)
-                    .await
-                    .map_err(|e| AppError::AuthFailed(e.to_string()))?
-            }
-            AuthMethod::PrivateKey { key_path, passphrase } => {
-                let key_data = tokio::fs::read_to_string(key_path)
-                    .await
-                    .map_err(|e| AppError::AuthFailed(format!("Cannot read key file: {}", e)))?;
-
-                let key_pair = if let Some(pass) = passphrase {
-                    decode_secret_key(&key_data, Some(pass))
-                        .map_err(|e| AppError::AuthFailed(format!("Key decode error: {}", e)))?
-                } else {
-                    decode_secret_key(&key_data, None)
-                        .map_err(|e| AppError::AuthFailed(format!("Key decode error: {}", e)))?
-                };
-
-                let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key_pair), None);
-
-                session
-                    .authenticate_publickey(&params.username, key_with_alg)
-                    .await
-                    .map_err(|e| AppError::AuthFailed(e.to_string()))?
-            }
-            AuthMethod::Agent => {
-                return Err(AppError::AuthFailed("Agent auth not yet implemented".into()));
-            }
-        };
-
-        if !auth_result.success() {
-            return Err(AppError::AuthFailed("Authentication rejected by server".into()));
-        }
-
-        // Open SFTP subsystem
+    /// Open an SFTP channel on an existing SSH connection.
+    pub async fn open(session: Arc<SshHandle>) -> AppResult<Self> {
         let channel = session
             .channel_open_session()
             .await
@@ -109,8 +45,70 @@ impl SftpClient {
         Ok(Self { session, sftp })
     }
 
-    /// List directory contents.
-    pub async fn list_dir(&self, path: &str) -> AppResult<Vec<FileEntry>> {
+    /// The underlying SSH connection, for deriving exec channels.
+    pub fn ssh_handle(&self) -> Arc<SshHandle> {
+        self.session.clone()
+    }
+
+    /// Get the underlying SFTP session for transfer operations.
+    pub fn sftp_session(&self) -> &SftpSession {
+        &self.sftp
+    }
+}
+
+struct SftpWriter(russh_sftp::client::fs::File);
+
+impl AsyncWrite for SftpWriter {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<Result<usize, std::io::Error>> {
+        std::pin::Pin::new(&mut self.0).poll_write(cx, buf)
+    }
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        std::pin::Pin::new(&mut self.0).poll_flush(cx)
+    }
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        std::pin::Pin::new(&mut self.0).poll_shutdown(cx)
+    }
+}
+
+#[async_trait]
+impl FsWriter for SftpWriter {
+    async fn finish(mut self: Box<Self>) -> AppResult<()> {
+        self.0
+            .shutdown()
+            .await
+            .map_err(|e| AppError::SftpError(format!("Remote close error: {}", e)))
+    }
+}
+
+#[async_trait]
+impl RemoteFs for SftpClient {
+    fn kind(&self) -> &'static str {
+        "sftp"
+    }
+
+    async fn stat(&self, path: &str) -> AppResult<FileStat> {
+        let meta = self
+            .sftp
+            .metadata(path)
+            .await
+            .map_err(|e| AppError::SftpError(e.to_string()))?;
+        Ok(FileStat {
+            size: meta.size.unwrap_or(0),
+            is_dir: meta.is_dir(),
+        })
+    }
+
+    async fn list_dir(&self, path: &str) -> AppResult<Vec<FileEntry>> {
         let entries = self
             .sftp
             .read_dir(path)
@@ -123,11 +121,7 @@ impl SftpClient {
             if name == "." || name == ".." {
                 continue;
             }
-            let full_path = if path == "/" {
-                format!("/{}", name)
-            } else {
-                format!("{}/{}", path, name)
-            };
+            let full_path = crate::fs::join_path(path, &name);
 
             let attrs = entry.metadata();
             let is_dir = attrs.is_dir();
@@ -151,32 +145,21 @@ impl SftpClient {
         Ok(result)
     }
 
-    /// Create a directory.
-    pub async fn mkdir(&self, path: &str) -> AppResult<()> {
+    async fn mkdir(&self, path: &str) -> AppResult<()> {
         self.sftp
             .create_dir(path)
             .await
             .map_err(|e| AppError::SftpError(e.to_string()))
     }
 
-    /// Remove a file.
-    pub async fn remove_file(&self, path: &str) -> AppResult<()> {
+    async fn remove_file(&self, path: &str) -> AppResult<()> {
         self.sftp
             .remove_file(path)
             .await
             .map_err(|e| AppError::SftpError(e.to_string()))
     }
 
-    /// Remove a directory.
-    pub async fn remove_dir(&self, path: &str) -> AppResult<()> {
-        self.sftp
-            .remove_dir(path)
-            .await
-            .map_err(|e| AppError::SftpError(e.to_string()))
-    }
-
-    /// Remove a directory and all of its contents recursively.
-    pub async fn remove_dir_all(&self, path: &str) -> AppResult<()> {
+    async fn remove_dir_all(&self, path: &str) -> AppResult<()> {
         // Breadth-first collect directories, deleting files along the way,
         // then remove directories deepest-first.
         let mut dirs = vec![path.to_string()];
@@ -193,13 +176,15 @@ impl SftpClient {
             i += 1;
         }
         for dir in dirs.iter().rev() {
-            self.remove_dir(dir).await?;
+            self.sftp
+                .remove_dir(dir)
+                .await
+                .map_err(|e| AppError::SftpError(e.to_string()))?;
         }
         Ok(())
     }
 
-    /// Rename/move a file or directory.
-    pub async fn rename(&self, old_path: &str, new_path: &str) -> AppResult<()> {
+    async fn rename(&self, old_path: &str, new_path: &str) -> AppResult<()> {
         self.sftp
             .rename(old_path, new_path)
             .await
@@ -207,7 +192,7 @@ impl SftpClient {
     }
 
     /// Read up to `max_bytes` from the start of a remote file.
-    pub async fn read_head(&self, path: &str, max_bytes: usize) -> AppResult<Vec<u8>> {
+    async fn read_head(&self, path: &str, max_bytes: usize) -> AppResult<Vec<u8>> {
         use tokio::io::AsyncReadExt;
 
         let mut file = self
@@ -233,9 +218,7 @@ impl SftpClient {
     }
 
     /// Overwrite a remote file with the given bytes (create if missing).
-    pub async fn write_file(&self, path: &str, data: &[u8]) -> AppResult<()> {
-        use tokio::io::AsyncWriteExt;
-
+    async fn write_file(&self, path: &str, data: &[u8]) -> AppResult<()> {
         let mut file = self
             .sftp
             .create(path)
@@ -250,8 +233,46 @@ impl SftpClient {
         Ok(())
     }
 
-    /// Get the underlying SFTP session for transfer operations.
-    pub fn sftp_session(&self) -> &SftpSession {
-        &self.sftp
+    async fn open_read(&self, path: &str, offset: u64) -> AppResult<FsReader> {
+        let meta = self
+            .sftp
+            .metadata(path)
+            .await
+            .map_err(|e| AppError::SftpError(format!("Cannot stat remote file: {}", e)))?;
+        let total = meta.size.unwrap_or(0);
+        let mut file = self
+            .sftp
+            .open(path)
+            .await
+            .map_err(|e| AppError::SftpError(format!("Cannot open remote file: {}", e)))?;
+        if offset > 0 {
+            file.seek(std::io::SeekFrom::Start(offset))
+                .await
+                .map_err(|e| AppError::SftpError(format!("Remote seek error: {}", e)))?;
+        }
+        Ok(FsReader {
+            total,
+            reader: Box::new(file),
+        })
+    }
+
+    async fn open_write(&self, path: &str, offset: u64) -> AppResult<Box<dyn FsWriter>> {
+        let mut file = if offset > 0 {
+            self.sftp
+                .open_with_flags(path, OpenFlags::WRITE)
+                .await
+                .map_err(|e| AppError::SftpError(format!("Cannot open remote file: {}", e)))?
+        } else {
+            self.sftp
+                .create(path)
+                .await
+                .map_err(|e| AppError::SftpError(format!("Cannot create remote file: {}", e)))?
+        };
+        if offset > 0 {
+            file.seek(std::io::SeekFrom::Start(offset))
+                .await
+                .map_err(|e| AppError::SftpError(format!("Remote seek error: {}", e)))?;
+        }
+        Ok(Box::new(SftpWriter(file)))
     }
 }

@@ -4,7 +4,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { open, save, ask, message } from '@tauri-apps/plugin-dialog'
 import { useTabsStore } from '@/stores/tabs'
 import { useTransferStore } from '@/stores/transfer'
-import { listDir, uploadFiles, downloadFiles, downloadFileAs, previewFile, saveFileContent, saveBookmark, removeEntry } from '@/composables/useTauri'
+import { listDir, uploadFiles, downloadFiles, downloadFileAs, previewFile, saveFileContent, saveBookmark, removeEntry, transferRemote } from '@/composables/useTauri'
 import type { FileEntry, FilePreview } from '@/types/filesystem'
 import type { Bookmark } from '@/types/connection'
 
@@ -44,6 +44,8 @@ const ctxMenu = ref<{ visible: boolean; x: number; y: number; entry: FileEntry |
   y: 0,
   entry: null,
 })
+/** Expanded state of the "Copy to" submenu inside the context menu. */
+const ctxCopyToOpen = ref(false)
 const preview = ref<{
   entry: FileEntry | null
   loading: boolean
@@ -581,6 +583,7 @@ function onEntryContextMenu(colIndex: number, entry: FileEntry, event: MouseEven
 
 function hideCtxMenu() {
   ctxMenu.value.visible = false
+  ctxCopyToOpen.value = false
   previewCtxMenu.value.visible = false
   pathCtxMenu.value.visible = false
 }
@@ -635,6 +638,43 @@ async function ctxDownload() {
   } catch (e) {
     console.error('Download failed:', e)
   }
+}
+
+/** Other connected tabs that can receive a cross-endpoint copy. */
+const copyToTargets = computed(() =>
+  tabsStore.tabs.filter(
+    (t) => t.status === 'connected' && t.sessionId && t.sessionId !== sessionId.value
+  )
+)
+
+const KIND_ICONS: Record<string, string> = { ssh: '⌁', container: '▣', pod: '⎈' }
+
+async function ctxCopyToTab(dstSessionId: string, dstDir: string) {
+  hideCtxMenu()
+  const sid = sessionId.value
+  const targets = selectedFiles.value.map((f) => f.path)
+  if (!sid || targets.length === 0) return
+  try {
+    await transferRemote(sid, targets, dstSessionId, dstDir)
+    await transferStore.syncTasks()
+  } catch (e) {
+    console.error('Copy to session failed:', e)
+    await message(`Copy failed: ${e}`, { title: 'Copy to', kind: 'error' })
+  }
+}
+
+/** Drag files out of the panel: payload consumed by tabs (cross-session copy). */
+function onEntryDragStart(entry: FileEntry, event: DragEvent) {
+  if (!selectedPaths.value.has(entry.path)) {
+    selectedPaths.value.clear()
+    selectedPaths.value.add(entry.path)
+  }
+  const payload = JSON.stringify({
+    sessionId: sessionId.value,
+    paths: selectedFiles.value.map((f) => f.path),
+  })
+  event.dataTransfer?.setData('application/x-shuttle-files', payload)
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copy'
 }
 
 async function ctxSaveAs() {
@@ -697,8 +737,9 @@ async function ctxAddBookmark() {
   const entry = ctxMenu.value.entry
   hideCtxMenu()
   const tab = tabsStore.activeTab
-  const params = tab?.connectParams
-  if (!tab || !params) return
+  if (!tab) return
+  const params = tab.connectParams
+  if (tab.kind === 'ssh' && !params) return
 
   // Bookmark the folder itself, or the containing dir for files
   const path = entry?.isDir ? entry.path : currentPath.value
@@ -708,17 +749,32 @@ async function ctxAddBookmark() {
   const bookmark: Bookmark = {
     id: crypto.randomUUID(),
     alias: alias.trim() || path,
-    host: params.host,
-    port: params.port,
-    username: params.username,
-    authMethod: params.auth.type,
+    host: params?.host ?? 'local',
+    port: params?.port ?? 0,
+    username: params?.username ?? '',
+    authMethod: params ? params.auth.type : 'agent',
     path,
+    kind: tab.kind,
   }
-  if (params.auth.type === 'key') {
+  if (params?.auth.type === 'key') {
     bookmark.privateKeyPath = params.auth.key_path
     if (params.auth.passphrase) bookmark.passphrase = params.auth.passphrase
-  } else if (params.auth.type === 'password') {
+  } else if (params?.auth.type === 'password') {
     bookmark.password = params.auth.password
+  }
+  if (tab.kind === 'container' && tab.containerSpec) {
+    bookmark.container = {
+      runtime: tab.containerSpec.runtime,
+      containerId: tab.containerSpec.containerId,
+      name: tab.containerSpec.name,
+    }
+  } else if (tab.kind === 'pod' && tab.podSpec) {
+    bookmark.pod = {
+      context: tab.podSpec.context,
+      namespace: tab.podSpec.namespace,
+      pod: tab.podSpec.pod,
+      container: tab.podSpec.container,
+    }
   }
 
   try {
@@ -856,6 +912,8 @@ watch(viewMode, () => {
                 selected: selectedPaths.has(entry.path),
                 opened: col.selectedPath === entry.path,
               }"
+              draggable="true"
+              @dragstart="onEntryDragStart(entry, $event)"
               @click="onEntryClick(colIndex, entry, $event)"
               @contextmenu.prevent="onEntryContextMenu(colIndex, entry, $event)"
             >
@@ -884,6 +942,8 @@ watch(viewMode, () => {
             :key="entry.path"
             class="file-row"
             :class="{ selected: selectedPaths.has(entry.path) }"
+            draggable="true"
+            @dragstart="onEntryDragStart(entry, $event)"
             @click="onListClick(entry, $event)"
             @dblclick="onListDblClick(entry)"
             @contextmenu.prevent="onListContextMenu(entry, $event)"
@@ -1009,6 +1069,25 @@ watch(viewMode, () => {
       >
         💾 Save As…
       </button>
+      <button
+        class="ctx-item"
+        :disabled="copyToTargets.length === 0"
+        @click.stop="ctxCopyToOpen = !ctxCopyToOpen"
+      >
+        📤 Copy to{{ selectedFiles.length > 1 ? ` (${selectedFiles.length} items)` : '' }} ▸
+      </button>
+      <template v-if="ctxCopyToOpen">
+        <button
+          v-for="t in copyToTargets"
+          :key="t.id"
+          class="ctx-item ctx-sub"
+          :title="`${t.label} — ${t.currentPath}`"
+          @click="ctxCopyToTab(t.sessionId!, t.currentPath)"
+        >
+          {{ KIND_ICONS[t.kind] ?? '⌁' }} {{ t.label }}
+          <span class="ctx-sub-path">{{ t.currentPath }}</span>
+        </button>
+      </template>
       <button class="ctx-item" @click="ctxAddBookmark">
         ⭐ Add Bookmark{{ ctxMenu.entry && !ctxMenu.entry.isDir ? ' (folder)' : '' }}
       </button>
@@ -1538,5 +1617,22 @@ watch(viewMode, () => {
 .ctx-item:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.ctx-item.ctx-sub {
+  padding-left: 24px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.ctx-sub-path {
+  color: #6c7086;
+  font-size: 11px;
+  font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

@@ -21,7 +21,7 @@ const transferStore = useTransferStore()
 interface GroupNode {
   id: string
   name: string
-  direction: 'upload' | 'download'
+  direction: 'upload' | 'download' | 'remote'
   tasks: TransferTask[]
   status: TransferTask['status']
   transferredBytes: number
@@ -364,12 +364,14 @@ function serverOf(task: TransferTask | undefined): string {
 }
 
 function taskFrom(task: TransferTask): string {
+  if (task.direction === 'remote') return `${serverOf(task)}:${task.sourcePath}`
   return task.direction === 'download'
     ? `${serverOf(task)}:${task.sourcePath}`
     : task.sourcePath
 }
 
 function taskTo(task: TransferTask): string {
+  if (task.direction === 'remote') return `${task.destHost || 'remote'}:${task.destPath}`
   return task.direction === 'download'
     ? task.destPath
     : `${serverOf(task)}:${task.destPath}`
@@ -378,12 +380,20 @@ function taskTo(task: TransferTask): string {
 function groupFrom(group: GroupNode): string {
   const remote = groupRemoteRoot(group) ?? ''
   const local = groupLocalRoot(group) ?? ''
+  if (group.direction === 'remote') {
+    const t = group.tasks[0]
+    return `${serverOf(t)}:${stripRel(t?.sourcePath ?? '', t?.relPath)}`
+  }
   return group.direction === 'download' ? `${serverOf(group.tasks[0])}:${remote}` : local
 }
 
 function groupTo(group: GroupNode): string {
   const remote = groupRemoteRoot(group) ?? ''
   const local = groupLocalRoot(group) ?? ''
+  if (group.direction === 'remote') {
+    const t = group.tasks[0]
+    return `${t?.destHost || 'remote'}:${stripRel(t?.destPath ?? '', t?.relPath)}`
+  }
   return group.direction === 'download' ? local : `${serverOf(group.tasks[0])}:${remote}`
 }
 
@@ -414,7 +424,7 @@ async function onShowInFolder(path: string | null) {
         <!-- Standalone file task -->
         <template v-if="row.type === 'task'">
           <div class="task-row">
-            <span class="task-icon">{{ row.task.direction === 'upload' ? '⬆' : '⬇' }}</span>
+            <span class="task-icon">{{ row.task.direction === 'upload' ? '⬆' : row.task.direction === 'remote' ? '⇄' : '⬇' }}</span>
             <span class="task-name">{{ taskLabel(row.task) }}</span>
             <span class="task-status" :class="row.task.status">{{ row.task.status }}</span>
             <div class="task-progress" v-if="row.task.status === 'active' || row.task.status === 'paused'">
@@ -453,7 +463,7 @@ async function onShowInFolder(path: string | null) {
         <template v-else>
           <div class="task-row group-row" @click="toggleGroup(row.group.id)">
             <span class="group-toggle">{{ expanded.has(row.group.id) ? '▾' : '▸' }}</span>
-            <span class="task-icon">{{ row.group.direction === 'upload' ? '⬆' : '⬇' }}</span>
+            <span class="task-icon">{{ row.group.direction === 'upload' ? '⬆' : row.group.direction === 'remote' ? '⇄' : '⬇' }}</span>
             <span class="task-name">📁 {{ row.group.name }}</span>
             <span class="group-count">{{ row.group.doneCount }}/{{ row.group.tasks.length }}</span>
             <span class="task-status" :class="row.group.status">{{ row.group.status }}</span>
@@ -482,7 +492,7 @@ async function onShowInFolder(path: string | null) {
           <template v-if="expanded.has(row.group.id)">
             <template v-for="task in row.group.tasks" :key="task.id">
               <div class="task-row child-row">
-                <span class="task-icon">{{ task.direction === 'upload' ? '⬆' : '⬇' }}</span>
+                <span class="task-icon">{{ task.direction === 'upload' ? '⬆' : task.direction === 'remote' ? '⇄' : '⬇' }}</span>
                 <span class="task-name">{{ taskLabel(task) }}</span>
                 <span class="task-status" :class="task.status">{{ task.status }}</span>
                 <div class="task-progress" v-if="task.status === 'active' || task.status === 'paused'">

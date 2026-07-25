@@ -1,8 +1,12 @@
 export interface TransferTask {
   id: string
   sessionId: string
+  /** Destination session for remote-to-remote copies. */
+  destSessionId?: string | null
   host?: string
   username?: string
+  /** Destination host label ("local" for downloads). */
+  destHost?: string
   /** Set when this task is part of a directory transfer. */
   groupId?: string
   groupName?: string
@@ -10,7 +14,7 @@ export interface TransferTask {
   relPath?: string
   /** Queue time in epoch milliseconds. */
   createdAt?: number
-  direction: 'upload' | 'download'
+  direction: 'upload' | 'download' | 'remote'
   sourcePath: string
   destPath: string
   totalBytes: number

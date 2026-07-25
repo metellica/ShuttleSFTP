@@ -28,12 +28,18 @@ pub enum TransferStatus {
 pub struct TransferTask {
     pub id: String,
     pub session_id: String,
+    /// Destination session for remote-to-remote copies (None = local).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dest_session_id: Option<String>,
     /// Remote host/username, used to rebind the task to a live session
     /// when resuming after a restart or reconnect.
     #[serde(default)]
     pub host: String,
     #[serde(default)]
     pub username: String,
+    /// Destination host label ("local" for downloads).
+    #[serde(default)]
+    pub dest_host: String,
     /// Set when this task is part of a directory transfer (tree display).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_id: Option<String>,
@@ -63,6 +69,8 @@ pub struct TransferTask {
 pub enum TransferDirection {
     Upload,
     Download,
+    /// Copy between two remote endpoints (host/container/pod).
+    Remote,
 }
 
 /// Group membership passed when queueing files of a directory transfer.

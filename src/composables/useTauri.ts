@@ -1,5 +1,14 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { ConnectParams, SshHostEntry, ConnectionProfile, Bookmark } from '@/types/connection'
+import type {
+  ConnectParams,
+  SshHostEntry,
+  ConnectionProfile,
+  Bookmark,
+  ContainerInfo,
+  PodInfo,
+  ContainerConnectSpec,
+  PodConnectSpec,
+} from '@/types/connection'
 import type { FileEntry, FilePreview } from '@/types/filesystem'
 import type { TransferTask } from '@/types/transfer'
 
@@ -7,8 +16,51 @@ import type { TransferTask } from '@/types/transfer'
 export const sshConnect = (params: ConnectParams) =>
   invoke<string>('connect', { params })
 
+export const connectContainer = (spec: ContainerConnectSpec) =>
+  invoke<string>('connect_container', { spec })
+
+export const connectPod = (spec: PodConnectSpec) =>
+  invoke<string>('connect_pod', { spec })
+
 export const sshDisconnect = (sessionId: string) =>
   invoke<void>('disconnect', { sessionId })
+
+// Container / pod discovery
+export const listContainers = (viaSessionId?: string, via?: ConnectParams) =>
+  invoke<ContainerInfo[]>('list_containers', {
+    viaSessionId: viaSessionId ?? null,
+    via: via ?? null,
+  })
+
+export const listKubeContexts = (viaSessionId?: string, via?: ConnectParams) =>
+  invoke<string[]>('list_kube_contexts', {
+    viaSessionId: viaSessionId ?? null,
+    via: via ?? null,
+  })
+
+export const listKubeNamespaces = (
+  context?: string,
+  viaSessionId?: string,
+  via?: ConnectParams
+) =>
+  invoke<string[]>('list_kube_namespaces', {
+    context: context ?? null,
+    viaSessionId: viaSessionId ?? null,
+    via: via ?? null,
+  })
+
+export const listKubePods = (
+  namespace: string,
+  context?: string,
+  viaSessionId?: string,
+  via?: ConnectParams
+) =>
+  invoke<PodInfo[]>('list_kube_pods', {
+    namespace,
+    context: context ?? null,
+    viaSessionId: viaSessionId ?? null,
+    via: via ?? null,
+  })
 
 // Filesystem
 export const listDir = (sessionId: string, path: string) =>
@@ -38,6 +90,14 @@ export const downloadFiles = (sessionId: string, remotePaths: string[], localDir
 
 export const downloadFileAs = (sessionId: string, remotePath: string, localPath: string) =>
   invoke<string[]>('download_as', { sessionId, remotePath, localPath })
+
+export const transferRemote = (
+  srcSessionId: string,
+  srcPaths: string[],
+  dstSessionId: string,
+  dstDir: string
+) =>
+  invoke<string[]>('transfer_remote', { srcSessionId, srcPaths, dstSessionId, dstDir })
 
 export const cancelTransfer = (taskId: string, deleteLocal = false) =>
   invoke<void>('cancel_transfer', { taskId, deleteLocal })

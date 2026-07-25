@@ -3,7 +3,7 @@ use tauri::State;
 
 use crate::error::AppResult;
 use crate::ssh::session::SessionManager;
-use crate::ssh::sftp::FileEntry;
+use crate::fs::FileEntry;
 
 /// Preview of a remote file: text content if it looks like text.
 #[derive(Debug, Clone, Serialize)]
@@ -31,7 +31,7 @@ pub async fn preview_file(
     let session = session_manager.get_session(&session_id).await?;
     let session = session.lock().await;
     // Read one extra byte to detect truncation
-    let bytes = session.sftp.read_head(&path, cap.saturating_add(1)).await?;
+    let bytes = session.fs.read_head(&path, cap.saturating_add(1)).await?;
 
     let truncated = bytes.len() > cap;
     let data = &bytes[..bytes.len().min(cap)];
@@ -81,7 +81,7 @@ pub async fn save_file(
 ) -> AppResult<()> {
     let session = session_manager.get_session(&session_id).await?;
     let session = session.lock().await;
-    session.sftp.write_file(&path, content.as_bytes()).await
+    session.fs.write_file(&path, content.as_bytes()).await
 }
 
 #[tauri::command]
@@ -92,7 +92,7 @@ pub async fn list_dir(
 ) -> AppResult<Vec<FileEntry>> {
     let session = session_manager.get_session(&session_id).await?;
     let session = session.lock().await;
-    session.sftp.list_dir(&path).await
+    session.fs.list_dir(&path).await
 }
 
 #[tauri::command]
@@ -103,7 +103,7 @@ pub async fn mkdir(
 ) -> AppResult<()> {
     let session = session_manager.get_session(&session_id).await?;
     let session = session.lock().await;
-    session.sftp.mkdir(&path).await
+    session.fs.mkdir(&path).await
 }
 
 #[tauri::command]
@@ -116,9 +116,9 @@ pub async fn remove(
     let session = session_manager.get_session(&session_id).await?;
     let session = session.lock().await;
     if is_dir {
-        session.sftp.remove_dir_all(&path).await
+        session.fs.remove_dir_all(&path).await
     } else {
-        session.sftp.remove_file(&path).await
+        session.fs.remove_file(&path).await
     }
 }
 
@@ -131,5 +131,5 @@ pub async fn rename(
 ) -> AppResult<()> {
     let session = session_manager.get_session(&session_id).await?;
     let session = session.lock().await;
-    session.sftp.rename(&old_path, &new_path).await
+    session.fs.rename(&old_path, &new_path).await
 }
