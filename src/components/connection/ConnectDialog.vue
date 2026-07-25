@@ -50,6 +50,7 @@ const saveNode = ref(false)
 const savePassword = ref(false)
 const selectedProfileId = ref('')
 const fromSshConfig = ref(false)
+const saveMsg = ref('')
 
 onMounted(async () => {
   try {
@@ -119,6 +120,7 @@ function onHostInput() {
   selectedAlias.value = ''
   selectedProfileId.value = ''
   fromSshConfig.value = false
+  saveMsg.value = ''
   openDropdown()
 }
 
@@ -136,6 +138,7 @@ function chooseHighlighted() {
 }
 
 function selectOption(opt: HostOption) {
+  saveMsg.value = ''
   if (opt.kind === 'profile' && opt.profile) {
     const p = opt.profile
     host.value = p.host
@@ -175,10 +178,53 @@ function selectOption(opt: HostOption) {
   showDropdown.value = false
 }
 
+function allAliasNames(): Set<string> {
+  const names = new Set(profiles.value.map((p) => p.name))
+  for (const e of sshHosts.value) names.add(e.name)
+  return names
+}
+
+function uniqueName(base: string): string {
+  const names = allAliasNames()
+  if (!names.has(base)) return base
+  let i = 2
+  while (names.has(`${base} ${i}`)) i++
+  return `${base} ${i}`
+}
+
+/** Alias taken by another saved profile or any SSH config host. */
+function aliasConflicts(name: string): boolean {
+  if (profiles.value.some((p) => p.name === name && p.id !== selectedProfileId.value))
+    return true
+  return sshHosts.value.some((e) => e.name === name)
+}
+
+/** Fork the current form into a new profile: same values, new identity. */
+function cloneAsNew() {
+  const base = (aliasName.value.trim() || selectedAlias.value || host.value) + ' copy'
+  aliasName.value = uniqueName(base)
+  selectedProfileId.value = ''
+  selectedAlias.value = ''
+  fromSshConfig.value = false
+  saveNode.value = true
+  saveMsg.value = ''
+}
+
+/** Fill the form from a saved profile, then detach it as a new copy. */
+function cloneOption(opt: HostOption) {
+  selectOption(opt)
+  cloneAsNew()
+}
+
 async function persistProfile() {
+  const name = aliasName.value.trim() || selectedAlias.value || host.value
+  // Alias must be globally unique across saved profiles and SSH config hosts
+  if (aliasConflicts(name)) {
+    throw new Error(`Alias "${name}" already exists — choose a different name`)
+  }
   const profile: ConnectionProfile = {
     id: selectedProfileId.value || crypto.randomUUID(),
-    name: aliasName.value.trim() || selectedAlias.value || host.value,
+    name,
     host: host.value,
     port: port.value,
     username: username.value,
@@ -192,8 +238,34 @@ async function persistProfile() {
   }
   try {
     await saveProfile(profile)
+    selectedProfileId.value = profile.id
+    selectedAlias.value = profile.name
+    aliasName.value = profile.name
+    try {
+      profiles.value = await listProfiles()
+    } catch (e) {
+      // ignore refresh failure
+    }
   } catch (e) {
     console.error('Failed to save profile:', e)
+    throw e
+  }
+}
+
+/** Save/update the profile without connecting. */
+async function saveOnly() {
+  error.value = ''
+  saveMsg.value = ''
+  if (!host.value.trim()) {
+    error.value = 'Host is required'
+    return
+  }
+  try {
+    await persistProfile()
+    saveNode.value = true
+    saveMsg.value = `Saved "${aliasName.value}"`
+  } catch (e: any) {
+    error.value = e?.toString() || 'Failed to save'
   }
 }
 
@@ -206,6 +278,14 @@ async function doConnect() {
       emit('connected', sessionId, '💻 This Machine', { kind: 'local', params: null })
       return
     }
+    if (saveNode.value && !fromSshConfig.value) {
+      // Fail fast on duplicate alias before opening the connection
+      const name = aliasName.value.trim() || selectedAlias.value || host.value
+      if (aliasConflicts(name)) {
+        error.value = `Alias "${name}" already exists — choose a different name`
+        return
+      }
+    }
     const params: ConnectParams = {
       host: host.value,
       port: port.value,
@@ -217,7 +297,8 @@ async function doConnect() {
     }
     const sessionId = await sshConnect(params)
     if (saveNode.value) {
-      await persistProfile()
+      // Don't let a save failure block a successful connection
+      await persistProfile().catch(() => {})
     }
     // Tab label: alias name > ssh config alias > host/IP
     const label = aliasName.value.trim() || selectedAlias.value || host.value
@@ -271,6 +352,13 @@ async function doConnect() {
               <span class="combo-kind">{{ opt.kind === 'profile' ? '⭐' : '📋' }}</span>
               <span class="combo-name">{{ opt.name }}</span>
               <span class="combo-host">{{ opt.hostname }}</span>
+              <button
+                class="combo-clone"
+                title="Clone this connection"
+                @mousedown.prevent.stop="cloneOption(opt)"
+              >
+                ⧉
+              </button>
             </div>
           </div>
         </div>
@@ -342,9 +430,18 @@ async function doConnect() {
       </p>
 
       <div v-if="error" class="error">{{ error }}</div>
+      <div v-if="saveMsg" class="saved">{{ saveMsg }}</div>
 
       <div class="actions">
         <button class="btn cancel" @click="emit('close')">Cancel</button>
+        <button
+          v-if="mode === 'ssh' && !fromSshConfig"
+          class="btn"
+          :title="selectedProfileId ? 'Update the saved connection without connecting' : 'Save without connecting'"
+          @click="saveOnly"
+        >
+          {{ selectedProfileId ? 'Save Changes' : 'Save' }}
+        </button>
         <button class="btn primary" :disabled="connecting" @click="doConnect">
           {{ connecting ? 'Connecting...' : mode === 'local' ? 'Open' : 'Connect' }}
         </button>
@@ -427,8 +524,8 @@ h2 {
 }
 
 .combo-item {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
   align-items: center;
   gap: 8px;
   padding: 6px 10px;
@@ -443,6 +540,9 @@ h2 {
 .combo-name {
   color: #89b4fa;
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .combo-kind {
@@ -485,6 +585,33 @@ h2 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.combo-clone {
+  flex-shrink: 0;
+  padding: 0 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: #a6adc8;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.combo-clone:hover {
+  border-color: #45475a;
+  background: #313244;
+  color: #89b4fa;
+}
+
+.saved {
+  margin-top: 12px;
+  padding: 8px;
+  background: #313244;
+  border-left: 3px solid #a6e3a1;
+  color: #a6e3a1;
+  font-size: 12px;
+  border-radius: 4px;
 }
 
 .form {
