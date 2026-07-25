@@ -52,7 +52,7 @@ onMounted(async () => {
         if (e.payload.status === 'completed') {
           const task = transferStore.tasks.find((t) => t.id === e.payload.taskId)
           // Refresh unless we know it was a download (remote dir unchanged)
-          if (!task || task.direction === 'upload') {
+          if (!task || task.direction === 'upload' || task.direction === 'remote') {
             remotePanelRef.value?.refresh()
           }
         }

@@ -84,30 +84,58 @@ async function main() {
     fail('pod files not listed: ' + JSON.stringify(inPod.slice(-4)))
   else ok('navigating /@pods/default/nginx-7d4/nginx lists its files')
 
-  // Context menu on a file offers Copy to with Local… always present
+  // Context menu on a file offers Copy; Paste is disabled until something is copied
   const fileEntry = (await page.$$('.entry'))[0]
   await fileEntry.click({ button: 'right' })
   await sleep(300)
-  const ctxItems = await page.$$eval('.ctx-menu .ctx-item', (els) =>
+  let ctxItems = await page.$$eval('.ctx-menu .ctx-item', (els) =>
+    els.map((e) => ({ text: e.textContent.trim(), disabled: e.disabled }))
+  )
+  const copyItem = ctxItems.find((t) => t.text.startsWith('📋 Copy'))
+  const pasteItem = ctxItems.find((t) => t.text.startsWith('📥 Paste'))
+  if (!copyItem) fail('Copy missing: ' + JSON.stringify(ctxItems))
+  else ok('context menu offers Copy')
+  if (!pasteItem || !pasteItem.disabled) fail('Paste should be disabled before Copy')
+  else ok('Paste disabled while clipboard is empty')
+
+  // Copy the file, then Paste becomes enabled
+  for (const b of await page.$$('.ctx-menu .ctx-item')) {
+    if ((await b.evaluate((e) => e.textContent.trim())).startsWith('📋 Copy')) {
+      await b.click()
+      break
+    }
+  }
+  await sleep(200)
+  await (await page.$$('.entry'))[0].click({ button: 'right' })
+  await sleep(300)
+  ctxItems = await page.$$eval('.ctx-menu .ctx-item', (els) =>
+    els.map((e) => ({ text: e.textContent.trim(), disabled: e.disabled }))
+  )
+  const paste2 = ctxItems.find((t) => t.text.startsWith('📥 Paste'))
+  if (!paste2 || paste2.disabled) fail('Paste not enabled after Copy: ' + JSON.stringify(ctxItems))
+  else ok('Paste enabled after Copy: ' + paste2.text)
+
+  // Blank-area context menu offers Paste / New Folder / Refresh
+  await page.keyboard.press('Escape')
+  await page.click('body')
+  await sleep(200)
+  // /@containers/redis has few entries, its column is mostly blank
+  await page.evaluate(() => {
+    const tabs = window.__tabs
+    tabs.updateTab(tabs.activeTab.id, { currentPath: '/@containers/redis' })
+  })
+  await sleep(900)
+  const cols = await page.$$('.column')
+  const lastCol = cols[cols.length - 1]
+  const box = await lastCol.boundingBox()
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height - 20, { button: 'right' })
+  await sleep(300)
+  const blankItems = await page.$$eval('.ctx-menu .ctx-item', (els) =>
     els.map((e) => e.textContent.trim())
   )
-  const copyTo = ctxItems.find((t) => t.startsWith('📤 Copy to'))
-  if (!copyTo) fail('Copy to missing: ' + JSON.stringify(ctxItems))
-  else {
-    const ctxBtns = await page.$$('.ctx-menu .ctx-item')
-    for (const b of ctxBtns) {
-      if ((await b.evaluate((e) => e.textContent.trim())).startsWith('📤 Copy to')) {
-        await b.click()
-        break
-      }
-    }
-    await sleep(200)
-    const subs = await page.$$eval('.ctx-menu .ctx-sub', (els) =>
-      els.map((e) => e.textContent.trim())
-    )
-    if (!subs.some((t) => t.includes('Local'))) fail('Copy to lacks Local…: ' + JSON.stringify(subs))
-    else ok('Copy to submenu always offers Local…')
-  }
+  if (!blankItems.some((t) => t.startsWith('📥 Paste')) || !blankItems.some((t) => t.includes('New Folder')))
+    fail('blank-area menu wrong: ' + JSON.stringify(blankItems))
+  else ok('blank-area right-click offers Paste / New Folder / Refresh: ' + blankItems[0])
 
   await page.screenshot({ path: 'mocktest/virtual-dirs.png' })
   await browser.close()

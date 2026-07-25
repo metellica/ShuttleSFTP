@@ -5,7 +5,7 @@ import { open, save, ask, message } from '@tauri-apps/plugin-dialog'
 import { useTabsStore } from '@/stores/tabs'
 import { useTransferStore } from '@/stores/transfer'
 import { useClipboardStore } from '@/stores/clipboard'
-import { listDir, uploadFiles, downloadFiles, downloadFileAs, previewFile, saveFileContent, saveBookmark, removeEntry, transferRemote } from '@/composables/useTauri'
+import { listDir, mkDir, uploadFiles, downloadFiles, downloadFileAs, previewFile, saveFileContent, saveBookmark, removeEntry, transferRemote } from '@/composables/useTauri'
 import type { FileEntry, FilePreview } from '@/types/filesystem'
 import type { Bookmark } from '@/types/connection'
 
@@ -40,14 +40,20 @@ function setViewMode(mode: ViewMode) {
   viewMode.value = mode
   localStorage.setItem('viewMode', mode)
 }
-const ctxMenu = ref<{ visible: boolean; x: number; y: number; entry: FileEntry | null }>({
+const ctxMenu = ref<{
+  visible: boolean
+  x: number
+  y: number
+  entry: FileEntry | null
+  /** Directory a blank-area menu targets (Paste / New Folder). */
+  dir: string | null
+}>({
   visible: false,
   x: 0,
   y: 0,
   entry: null,
+  dir: null,
 })
-/** Expanded state of the "Copy to" submenu inside the context menu. */
-const ctxCopyToOpen = ref(false)
 const preview = ref<{
   entry: FileEntry | null
   loading: boolean
@@ -568,7 +574,7 @@ function onListContextMenu(entry: FileEntry, event: MouseEvent) {
     selectedPaths.value.clear()
     selectedPaths.value.add(entry.path)
   }
-  ctxMenu.value = { visible: true, x: event.clientX, y: event.clientY, entry }
+  ctxMenu.value = { visible: true, x: event.clientX, y: event.clientY, entry, dir: null }
 }
 
 // Context menu
@@ -580,12 +586,23 @@ function onEntryContextMenu(colIndex: number, entry: FileEntry, event: MouseEven
     const col = columns.value[colIndex]
     if (col) col.selectedPath = entry.path
   }
-  ctxMenu.value = { visible: true, x: event.clientX, y: event.clientY, entry }
+  ctxMenu.value = { visible: true, x: event.clientX, y: event.clientY, entry, dir: null }
+}
+
+/** Right-click on the blank area of a column / the list: dir-level menu. */
+function onBlankContextMenu(dir: string, event: MouseEvent) {
+  previewCtxMenu.value.visible = false
+  ctxMenu.value = { visible: true, x: event.clientX, y: event.clientY, entry: null, dir }
+}
+
+/** Left-click on blank space clears the selection. */
+function onBlankClick() {
+  selectedPaths.value.clear()
+  selectionAnchor.value = null
 }
 
 function hideCtxMenu() {
   ctxMenu.value.visible = false
-  ctxCopyToOpen.value = false
   previewCtxMenu.value.visible = false
   pathCtxMenu.value.visible = false
 }
@@ -642,15 +659,6 @@ async function ctxDownload() {
   }
 }
 
-/** Other connected tabs that can receive a cross-endpoint copy. */
-const copyToTargets = computed(() =>
-  tabsStore.tabs.filter(
-    (t) => t.status === 'connected' && t.sessionId && t.sessionId !== sessionId.value
-  )
-)
-
-const KIND_ICONS: Record<string, string> = { ssh: '⌁', local: '💻' }
-
 /** Icons for virtual container/pod dirs, falling back to file/folder. */
 function entryIcon(e: FileEntry): string {
   if (e.name === '@containers') return '▣'
@@ -662,20 +670,6 @@ function entryIcon(e: FileEntry): string {
   return e.isDir ? '📁' : '📄'
 }
 
-async function ctxCopyToTab(dstSessionId: string, dstDir: string) {
-  hideCtxMenu()
-  const sid = sessionId.value
-  const targets = selectedFiles.value.map((f) => f.path)
-  if (!sid || targets.length === 0) return
-  try {
-    await transferRemote(sid, targets, dstSessionId, dstDir)
-    await transferStore.syncTasks()
-  } catch (e) {
-    console.error('Copy to session failed:', e)
-    await message(`Copy failed: ${e}`, { title: 'Copy to', kind: 'error' })
-  }
-}
-
 /** Mark the selection for a later Paste (in any session). */
 function ctxCopyFiles() {
   const sid = sessionId.value
@@ -685,13 +679,14 @@ function ctxCopyFiles() {
   clipboard.set(sid, targets, tabsStore.activeTab?.label ?? '')
 }
 
-/** Paste into the right-clicked folder, or the current directory. */
+/** Paste into the right-clicked folder/blank dir, or the current directory. */
 async function ctxPasteFiles() {
   const entry = ctxMenu.value.entry
+  const blankDir = ctxMenu.value.dir
   hideCtxMenu()
   const sid = sessionId.value
   if (!sid || !clipboard.sessionId || clipboard.paths.length === 0) return
-  const destDir = entry?.isDir ? entry.path : currentPath.value
+  const destDir = entry?.isDir ? entry.path : blankDir ?? currentPath.value
   try {
     await transferRemote(clipboard.sessionId, [...clipboard.paths], sid, destDir)
     await transferStore.syncTasks()
@@ -705,8 +700,31 @@ async function ctxPasteFiles() {
 const pasteTargetName = computed(() => {
   const entry = ctxMenu.value.entry
   if (entry?.isDir) return entry.name
-  return currentPath.value.split('/').filter(Boolean).pop() ?? '/'
+  const dir = ctxMenu.value.dir ?? currentPath.value
+  return dir.split('/').filter(Boolean).pop() ?? '/'
 })
+
+/** New folder inside the blank-clicked directory. */
+async function ctxNewFolder() {
+  const dir = ctxMenu.value.dir ?? currentPath.value
+  hideCtxMenu()
+  const sid = sessionId.value
+  if (!sid) return
+  const name = prompt('New folder name:')
+  if (!name?.trim()) return
+  try {
+    await mkDir(sid, dir === '/' ? `/${name.trim()}` : `${dir}/${name.trim()}`)
+    await refresh()
+  } catch (e) {
+    console.error('Create folder failed:', e)
+    await message(`Create folder failed: ${e}`, { title: 'New Folder', kind: 'error' })
+  }
+}
+
+function ctxRefresh() {
+  hideCtxMenu()
+  refresh()
+}
 
 /** Drag files out of the panel: payload consumed by tabs (cross-session copy). */
 function onEntryDragStart(entry: FileEntry, event: DragEvent) {
@@ -967,8 +985,20 @@ watch(viewMode, () => {
 
     <div class="body" ref="bodyEl">
       <!-- Finder-style Miller columns -->
-      <div v-if="viewMode === 'columns'" v-show="!previewMaximized" class="columns">
-        <div v-for="(col, colIndex) in columns" :key="col.path" class="column">
+      <div
+        v-if="viewMode === 'columns'"
+        v-show="!previewMaximized"
+        class="columns"
+        @click.self="onBlankClick"
+        @contextmenu.self.prevent="onBlankContextMenu(currentPath, $event)"
+      >
+        <div
+          v-for="(col, colIndex) in columns"
+          :key="col.path"
+          class="column"
+          @click.self="onBlankClick"
+          @contextmenu.self.prevent="onBlankContextMenu(col.path, $event)"
+        >
           <div v-if="col.loading" class="col-loading">Loading...</div>
           <template v-else>
             <div
@@ -999,7 +1029,13 @@ watch(viewMode, () => {
       </div>
 
       <!-- Windows Explorer-style details list -->
-      <div v-else v-show="!previewMaximized" class="list-view">
+      <div
+        v-else
+        v-show="!previewMaximized"
+        class="list-view"
+        @click.self="onBlankClick"
+        @contextmenu.self.prevent="onBlankContextMenu(currentPath, $event)"
+      >
         <div v-if="listLoading" class="col-loading">Loading...</div>
         <template v-else>
           <div class="file-header">
@@ -1138,17 +1174,13 @@ watch(viewMode, () => {
       :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }"
       @click.stop
     >
-      <button class="ctx-item" @click="ctxDownload">⬇ Download…</button>
-      <button
-        class="ctx-item"
-        :disabled="!ctxMenu.entry"
-        @click="ctxSaveAs"
-      >
-        💾 Save As…
-      </button>
-      <button class="ctx-item" @click="ctxCopyFiles">
-        📋 Copy{{ selectedFiles.length > 1 ? ` (${selectedFiles.length} items)` : '' }}
-      </button>
+      <template v-if="ctxMenu.entry">
+        <button class="ctx-item" @click="ctxDownload">⬇ Download…</button>
+        <button class="ctx-item" @click="ctxSaveAs">💾 Save As…</button>
+        <button class="ctx-item" @click="ctxCopyFiles">
+          📋 Copy{{ selectedFiles.length > 1 ? ` (${selectedFiles.length} items)` : '' }}
+        </button>
+      </template>
       <button
         class="ctx-item"
         :disabled="!clipboard.sessionId || clipboard.paths.length === 0"
@@ -1157,33 +1189,18 @@ watch(viewMode, () => {
       >
         📥 Paste{{ clipboard.paths.length ? ` (${clipboard.paths.length})` : '' }} into “{{ pasteTargetName }}”
       </button>
-      <button
-        class="ctx-item"
-        @click.stop="ctxCopyToOpen = !ctxCopyToOpen"
-      >
-        📤 Copy to{{ selectedFiles.length > 1 ? ` (${selectedFiles.length} items)` : '' }} ▸
-      </button>
-      <template v-if="ctxCopyToOpen">
-        <button class="ctx-item ctx-sub" @click="ctxDownload">
-          💻 Local…
-        </button>
-        <button
-          v-for="t in copyToTargets"
-          :key="t.id"
-          class="ctx-item ctx-sub"
-          :title="`${t.label} — ${t.currentPath}`"
-          @click="ctxCopyToTab(t.sessionId!, t.currentPath)"
-        >
-          {{ KIND_ICONS[t.kind] ?? '⌁' }} {{ t.label }}
-          <span class="ctx-sub-path">{{ t.currentPath }}</span>
-        </button>
+      <template v-if="!ctxMenu.entry">
+        <button class="ctx-item" @click="ctxNewFolder">📁 New Folder…</button>
+        <button class="ctx-item" @click="ctxRefresh">🔄 Refresh</button>
       </template>
+      <template v-if="ctxMenu.entry">
       <button class="ctx-item" @click="ctxAddBookmark">
         ⭐ Add Bookmark{{ ctxMenu.entry && !ctxMenu.entry.isDir ? ' (folder)' : '' }}
       </button>
       <button class="ctx-item ctx-danger" @click="ctxDelete">
         🗑 Delete{{ selectedFiles.length > 1 ? ` (${selectedFiles.length} items)` : '' }}…
       </button>
+      </template>
     </div>
 
     <!-- Preview copy menu -->
@@ -1714,22 +1731,5 @@ watch(viewMode, () => {
 .ctx-item:disabled {
   opacity: 0.4;
   cursor: not-allowed;
-}
-
-.ctx-item.ctx-sub {
-  padding-left: 24px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  overflow: hidden;
-}
-
-.ctx-sub-path {
-  color: #6c7086;
-  font-size: 11px;
-  font-family: monospace;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 </style>
