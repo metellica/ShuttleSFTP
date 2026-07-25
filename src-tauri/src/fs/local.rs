@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 use async_trait::async_trait;
@@ -45,7 +45,7 @@ impl FsWriter for LocalWriter {
     }
 }
 
-fn to_entry(dir: &Path, name: String, meta: &std::fs::Metadata) -> FileEntry {
+fn to_entry(dir: &str, name: String, meta: &std::fs::Metadata) -> FileEntry {
     let modified = meta
         .modified()
         .ok()
@@ -53,13 +53,63 @@ fn to_entry(dir: &Path, name: String, meta: &std::fs::Metadata) -> FileEntry {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     FileEntry {
-        path: dir.join(&name).to_string_lossy().to_string(),
+        path: crate::fs::join_path(dir, &name),
         name,
         is_dir: meta.is_dir(),
         size: meta.len(),
         modified,
         permissions: None,
     }
+}
+
+/// Map a browse path to a native file system path.
+///
+/// On Windows the virtual root "/" lists drives, and drive paths are
+/// represented as "/C:/Users/...". Native Windows paths ("C:\...") and
+/// current-drive paths pass through unchanged.
+#[cfg(windows)]
+fn native_path(path: &str) -> PathBuf {
+    let p = path.strip_prefix('/').unwrap_or(path);
+    let bytes = p.as_bytes();
+    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        let mut s = p.replace('/', "\\");
+        if s.len() == 2 {
+            s.push('\\'); // "C:" -> "C:\" (drive root, not drive-relative)
+        }
+        PathBuf::from(s)
+    } else {
+        PathBuf::from(path)
+    }
+}
+
+#[cfg(not(windows))]
+fn native_path(path: &str) -> PathBuf {
+    PathBuf::from(path)
+}
+
+#[cfg(windows)]
+fn is_virtual_root(path: &str) -> bool {
+    path.trim_matches('/').is_empty()
+}
+
+/// List available drive letters as directory entries under "/".
+#[cfg(windows)]
+async fn list_drives() -> Vec<FileEntry> {
+    let mut out = Vec::new();
+    for letter in 'A'..='Z' {
+        let root = format!("{}:\\", letter);
+        if tokio::fs::metadata(&root).await.is_ok() {
+            out.push(FileEntry {
+                name: format!("{}:", letter),
+                path: format!("/{}:", letter),
+                is_dir: true,
+                size: 0,
+                modified: 0,
+                permissions: None,
+            });
+        }
+    }
+    out
 }
 
 #[async_trait]
@@ -69,7 +119,11 @@ impl RemoteFs for LocalFs {
     }
 
     async fn stat(&self, path: &str) -> AppResult<FileStat> {
-        let meta = tokio::fs::metadata(path)
+        #[cfg(windows)]
+        if is_virtual_root(path) {
+            return Ok(FileStat { size: 0, is_dir: true });
+        }
+        let meta = tokio::fs::metadata(native_path(path))
             .await
             .map_err(|e| AppError::IoError(format!("Cannot stat {}: {}", path, e)))?;
         Ok(FileStat {
@@ -79,7 +133,11 @@ impl RemoteFs for LocalFs {
     }
 
     async fn list_dir(&self, path: &str) -> AppResult<Vec<FileEntry>> {
-        let dir = PathBuf::from(path);
+        #[cfg(windows)]
+        if is_virtual_root(path) {
+            return Ok(list_drives().await);
+        }
+        let dir = native_path(path);
         let mut rd = tokio::fs::read_dir(&dir)
             .await
             .map_err(|e| AppError::IoError(format!("Cannot read dir {}: {}", path, e)))?;
@@ -91,39 +149,39 @@ impl RemoteFs for LocalFs {
         {
             let name = entry.file_name().to_string_lossy().to_string();
             if let Ok(meta) = entry.metadata().await {
-                result.push(to_entry(&dir, name, &meta));
+                result.push(to_entry(path, name, &meta));
             }
         }
         Ok(result)
     }
 
     async fn mkdir(&self, path: &str) -> AppResult<()> {
-        tokio::fs::create_dir_all(path)
+        tokio::fs::create_dir_all(native_path(path))
             .await
             .map_err(|e| AppError::IoError(format!("Cannot create dir {}: {}", path, e)))
     }
 
     async fn remove_file(&self, path: &str) -> AppResult<()> {
-        tokio::fs::remove_file(path)
+        tokio::fs::remove_file(native_path(path))
             .await
             .map_err(|e| AppError::IoError(format!("Cannot remove {}: {}", path, e)))
     }
 
     async fn remove_dir_all(&self, path: &str) -> AppResult<()> {
-        tokio::fs::remove_dir_all(path)
+        tokio::fs::remove_dir_all(native_path(path))
             .await
             .map_err(|e| AppError::IoError(format!("Cannot remove dir {}: {}", path, e)))
     }
 
     async fn rename(&self, old_path: &str, new_path: &str) -> AppResult<()> {
-        tokio::fs::rename(old_path, new_path)
+        tokio::fs::rename(native_path(old_path), native_path(new_path))
             .await
             .map_err(|e| AppError::IoError(format!("Cannot rename {}: {}", old_path, e)))
     }
 
     async fn read_head(&self, path: &str, max_bytes: usize) -> AppResult<Vec<u8>> {
         use tokio::io::AsyncReadExt;
-        let mut file = tokio::fs::File::open(path)
+        let mut file = tokio::fs::File::open(native_path(path))
             .await
             .map_err(|e| AppError::IoError(format!("Cannot open {}: {}", path, e)))?;
         let mut buf = Vec::new();
@@ -143,16 +201,17 @@ impl RemoteFs for LocalFs {
     }
 
     async fn write_file(&self, path: &str, data: &[u8]) -> AppResult<()> {
-        tokio::fs::write(path, data)
+        tokio::fs::write(native_path(path), data)
             .await
             .map_err(|e| AppError::IoError(format!("Cannot write {}: {}", path, e)))
     }
 
     async fn open_read(&self, path: &str, offset: u64) -> AppResult<FsReader> {
-        let meta = tokio::fs::metadata(path)
+        let native = native_path(path);
+        let meta = tokio::fs::metadata(&native)
             .await
             .map_err(|e| AppError::IoError(format!("Cannot stat {}: {}", path, e)))?;
-        let mut file = tokio::fs::File::open(path)
+        let mut file = tokio::fs::File::open(&native)
             .await
             .map_err(|e| AppError::IoError(format!("Cannot open {}: {}", path, e)))?;
         if offset > 0 {
@@ -167,14 +226,15 @@ impl RemoteFs for LocalFs {
     }
 
     async fn open_write(&self, path: &str, offset: u64) -> AppResult<Box<dyn FsWriter>> {
+        let native = native_path(path);
         let mut file = if offset > 0 {
             tokio::fs::OpenOptions::new()
                 .write(true)
-                .open(path)
+                .open(&native)
                 .await
                 .map_err(|e| AppError::IoError(format!("Cannot open {}: {}", path, e)))?
         } else {
-            tokio::fs::File::create(path)
+            tokio::fs::File::create(&native)
                 .await
                 .map_err(|e| AppError::IoError(format!("Cannot create {}: {}", path, e)))?
         };
