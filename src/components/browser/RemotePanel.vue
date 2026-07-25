@@ -1071,12 +1071,14 @@ watch(viewMode, () => {
       </button>
       <button
         class="ctx-item"
-        :disabled="copyToTargets.length === 0"
         @click.stop="ctxCopyToOpen = !ctxCopyToOpen"
       >
         📤 Copy to{{ selectedFiles.length > 1 ? ` (${selectedFiles.length} items)` : '' }} ▸
       </button>
       <template v-if="ctxCopyToOpen">
+        <button class="ctx-item ctx-sub" @click="ctxDownload">
+          💻 Local…
+        </button>
         <button
           v-for="t in copyToTargets"
           :key="t.id"
