@@ -4,6 +4,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { open, save, ask, message } from '@tauri-apps/plugin-dialog'
 import { useTabsStore } from '@/stores/tabs'
 import { useTransferStore } from '@/stores/transfer'
+import { useClipboardStore } from '@/stores/clipboard'
 import { listDir, uploadFiles, downloadFiles, downloadFileAs, previewFile, saveFileContent, saveBookmark, removeEntry, transferRemote } from '@/composables/useTauri'
 import type { FileEntry, FilePreview } from '@/types/filesystem'
 import type { Bookmark } from '@/types/connection'
@@ -19,6 +20,7 @@ interface Column {
 
 const tabsStore = useTabsStore()
 const transferStore = useTransferStore()
+const clipboard = useClipboardStore()
 const columns = ref<Column[]>([])
 const dragOver = ref(false)
 const selectedPaths = ref<Set<string>>(new Set())
@@ -674,23 +676,37 @@ async function ctxCopyToTab(dstSessionId: string, dstDir: string) {
   }
 }
 
-/** Copy within the current session to a directory the user types. */
-async function ctxCopyToHere() {
+/** Mark the selection for a later Paste (in any session). */
+function ctxCopyFiles() {
   const sid = sessionId.value
   const targets = selectedFiles.value.map((f) => f.path)
   hideCtxMenu()
   if (!sid || targets.length === 0) return
-  const dest = prompt('Copy to directory (this session):', currentPath.value)
-  if (dest === null) return
-  const destDir = normalizePath(dest)
+  clipboard.set(sid, targets, tabsStore.activeTab?.label ?? '')
+}
+
+/** Paste into the right-clicked folder, or the current directory. */
+async function ctxPasteFiles() {
+  const entry = ctxMenu.value.entry
+  hideCtxMenu()
+  const sid = sessionId.value
+  if (!sid || !clipboard.sessionId || clipboard.paths.length === 0) return
+  const destDir = entry?.isDir ? entry.path : currentPath.value
   try {
-    await transferRemote(sid, targets, sid, destDir)
+    await transferRemote(clipboard.sessionId, [...clipboard.paths], sid, destDir)
     await transferStore.syncTasks()
   } catch (e) {
-    console.error('Copy in session failed:', e)
-    await message(`Copy failed: ${e}`, { title: 'Copy to', kind: 'error' })
+    console.error('Paste failed:', e)
+    await message(`Paste failed: ${e}`, { title: 'Paste', kind: 'error' })
   }
 }
+
+/** Name of the folder Paste would target, for the menu label. */
+const pasteTargetName = computed(() => {
+  const entry = ctxMenu.value.entry
+  if (entry?.isDir) return entry.name
+  return currentPath.value.split('/').filter(Boolean).pop() ?? '/'
+})
 
 /** Drag files out of the panel: payload consumed by tabs (cross-session copy). */
 function onEntryDragStart(entry: FileEntry, event: DragEvent) {
@@ -704,6 +720,42 @@ function onEntryDragStart(entry: FileEntry, event: DragEvent) {
   })
   event.dataTransfer?.setData('application/x-shuttle-files', payload)
   if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copy'
+}
+
+// --- Drop dragged files onto a folder entry (copy into it) -----------------
+
+const dropTargetPath = ref<string | null>(null)
+
+function onEntryDragOver(entry: FileEntry, event: DragEvent) {
+  if (!entry.isDir) return
+  if (!event.dataTransfer?.types.includes('application/x-shuttle-files')) return
+  event.preventDefault()
+  event.dataTransfer.dropEffect = 'copy'
+  dropTargetPath.value = entry.path
+}
+
+function onEntryDragLeave(entry: FileEntry) {
+  if (dropTargetPath.value === entry.path) dropTargetPath.value = null
+}
+
+async function onEntryDrop(entry: FileEntry, event: DragEvent) {
+  dropTargetPath.value = null
+  if (!entry.isDir) return
+  const raw = event.dataTransfer?.getData('application/x-shuttle-files')
+  if (!raw || !sessionId.value) return
+  event.preventDefault()
+  event.stopPropagation()
+  try {
+    const payload = JSON.parse(raw) as { sessionId: string; paths: string[] }
+    if (!payload.sessionId || payload.paths.length === 0) return
+    // Ignore dropping something onto itself
+    if (payload.sessionId === sessionId.value && payload.paths.includes(entry.path)) return
+    await transferRemote(payload.sessionId, payload.paths, sessionId.value, entry.path)
+    await transferStore.syncTasks()
+  } catch (e) {
+    console.error('Drop copy failed:', e)
+    await message(`Copy failed: ${e}`, { title: 'Copy', kind: 'error' })
+  }
 }
 
 async function ctxSaveAs() {
@@ -926,9 +978,13 @@ watch(viewMode, () => {
               :class="{
                 selected: selectedPaths.has(entry.path),
                 opened: col.selectedPath === entry.path,
+                'drop-target': dropTargetPath === entry.path,
               }"
               draggable="true"
               @dragstart="onEntryDragStart(entry, $event)"
+              @dragover="onEntryDragOver(entry, $event)"
+              @dragleave="onEntryDragLeave(entry)"
+              @drop="onEntryDrop(entry, $event)"
               @click="onEntryClick(colIndex, entry, $event)"
               @contextmenu.prevent="onEntryContextMenu(colIndex, entry, $event)"
             >
@@ -956,9 +1012,15 @@ watch(viewMode, () => {
             v-for="entry in listEntries"
             :key="entry.path"
             class="file-row"
-            :class="{ selected: selectedPaths.has(entry.path) }"
+            :class="{
+              selected: selectedPaths.has(entry.path),
+              'drop-target': dropTargetPath === entry.path,
+            }"
             draggable="true"
             @dragstart="onEntryDragStart(entry, $event)"
+            @dragover="onEntryDragOver(entry, $event)"
+            @dragleave="onEntryDragLeave(entry)"
+            @drop="onEntryDrop(entry, $event)"
             @click="onListClick(entry, $event)"
             @dblclick="onListDblClick(entry)"
             @contextmenu.prevent="onListContextMenu(entry, $event)"
@@ -1084,6 +1146,17 @@ watch(viewMode, () => {
       >
         💾 Save As…
       </button>
+      <button class="ctx-item" @click="ctxCopyFiles">
+        📋 Copy{{ selectedFiles.length > 1 ? ` (${selectedFiles.length} items)` : '' }}
+      </button>
+      <button
+        class="ctx-item"
+        :disabled="!clipboard.sessionId || clipboard.paths.length === 0"
+        :title="clipboard.sourceLabel ? `From ${clipboard.sourceLabel}` : ''"
+        @click="ctxPasteFiles"
+      >
+        📥 Paste{{ clipboard.paths.length ? ` (${clipboard.paths.length})` : '' }} into “{{ pasteTargetName }}”
+      </button>
       <button
         class="ctx-item"
         @click.stop="ctxCopyToOpen = !ctxCopyToOpen"
@@ -1093,9 +1166,6 @@ watch(viewMode, () => {
       <template v-if="ctxCopyToOpen">
         <button class="ctx-item ctx-sub" @click="ctxDownload">
           💻 Local…
-        </button>
-        <button class="ctx-item ctx-sub" @click="ctxCopyToHere">
-          📁 This session…
         </button>
         <button
           v-for="t in copyToTargets"
@@ -1298,6 +1368,13 @@ watch(viewMode, () => {
 .entry.selected .entry-size,
 .entry.selected .entry-arrow {
   color: #c8d4f5;
+}
+
+.entry.drop-target,
+.file-row.drop-target {
+  background: #2c3a5c;
+  outline: 1px dashed #89b4fa;
+  outline-offset: -2px;
 }
 
 /* Ancestor columns on the opened path: muted highlight */
