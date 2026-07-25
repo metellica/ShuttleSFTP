@@ -137,6 +137,39 @@ async function main() {
     fail('blank-area menu wrong: ' + JSON.stringify(blankItems))
   else ok('blank-area right-click offers Paste / New Folder / Refresh: ' + blankItems[0])
 
+  // Back / Forward / Up navigation
+  await page.keyboard.press('Escape')
+  await page.click('body')
+  await sleep(200)
+  const navState = async () =>
+    page.evaluate(() =>
+      JSON.parse(
+        JSON.stringify({
+          path: window.__tabs.activeTab.currentPath,
+          canBack: window.__tabs.canGoBack,
+          canFwd: window.__tabs.canGoForward,
+        })
+      )
+    )
+  // We navigated: / -> /@containers/redis -> /@pods/... -> /@containers/redis
+  let st = await navState()
+  if (!st.canBack) fail('back should be enabled after navigation')
+  await page.click('.nav-btn[title^="Back"]')
+  await sleep(600)
+  st = await navState()
+  if (!st.canFwd) fail('forward should be enabled after going back')
+  else ok('back works, forward becomes available (now at ' + st.path + ')')
+  await page.click('.nav-btn[title^="Forward"]')
+  await sleep(600)
+  st = await navState()
+  if (st.path !== '/@containers/redis') fail('forward went to wrong path: ' + st.path)
+  else ok('forward returns to /@containers/redis')
+  await page.click('.nav-btn[title^="Up"]')
+  await sleep(600)
+  st = await navState()
+  if (st.path !== '/@containers') fail('up went to wrong path: ' + st.path)
+  else ok('up navigates to parent /@containers')
+
   await page.screenshot({ path: 'mocktest/virtual-dirs.png' })
   await browser.close()
   console.log(process.exitCode === 1 ? '\nSMOKE TEST FAILED' : '\nSMOKE TEST PASSED')

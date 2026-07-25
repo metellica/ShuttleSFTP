@@ -12,6 +12,9 @@ export interface Tab {
   kind: SessionKind
   /** Params used to establish the SSH leg; needed for bookmarking. */
   connectParams: ConnectParams | null
+  /** Visited directories, for back/forward navigation. */
+  history: string[]
+  historyIndex: number
 }
 
 export const useTabsStore = defineStore('tabs', () => {
@@ -32,6 +35,8 @@ export const useTabsStore = defineStore('tabs', () => {
       currentPath: '/',
       kind: 'ssh',
       connectParams: null,
+      history: ['/'],
+      historyIndex: 0,
     }
     tabs.value.push(tab)
     activeTabId.value = id
@@ -53,8 +58,56 @@ export const useTabsStore = defineStore('tabs', () => {
 
   function updateTab(tabId: string, updates: Partial<Tab>) {
     const tab = tabs.value.find((t) => t.id === tabId)
-    if (tab) Object.assign(tab, updates)
+    if (!tab) return
+    if (updates.sessionId !== undefined && updates.sessionId !== tab.sessionId) {
+      // New session in this tab: old history is meaningless
+      const start = updates.currentPath ?? tab.currentPath
+      tab.history = [start]
+      tab.historyIndex = 0
+    } else if (
+      updates.currentPath !== undefined &&
+      updates.currentPath !== tab.currentPath
+    ) {
+      // Normal navigation: drop the forward stack, push the new path
+      tab.history = tab.history.slice(0, tab.historyIndex + 1)
+      tab.history.push(updates.currentPath)
+      tab.historyIndex = tab.history.length - 1
+    }
+    Object.assign(tab, updates)
   }
 
-  return { tabs, activeTabId, activeTab, addTab, closeTab, setActiveTab, updateTab }
+  const canGoBack = computed(() => (activeTab.value?.historyIndex ?? 0) > 0)
+  const canGoForward = computed(() => {
+    const t = activeTab.value
+    return !!t && t.historyIndex < t.history.length - 1
+  })
+
+  function goBack() {
+    const tab = activeTab.value
+    if (!tab || tab.historyIndex <= 0) return
+    tab.historyIndex--
+    // Set directly: history moves must not re-push
+    tab.currentPath = tab.history[tab.historyIndex] ?? '/'
+  }
+
+  function goForward() {
+    const tab = activeTab.value
+    if (!tab || tab.historyIndex >= tab.history.length - 1) return
+    tab.historyIndex++
+    tab.currentPath = tab.history[tab.historyIndex] ?? '/'
+  }
+
+  return {
+    tabs,
+    activeTabId,
+    activeTab,
+    canGoBack,
+    canGoForward,
+    addTab,
+    closeTab,
+    setActiveTab,
+    updateTab,
+    goBack,
+    goForward,
+  }
 })

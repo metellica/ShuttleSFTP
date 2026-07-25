@@ -873,9 +873,33 @@ async function ctxAddBookmark() {
 let unlistenDragDrop: (() => void) | null = null
 let suppressWatch = false
 
+/** Alt+←/→ and mouse back/forward buttons navigate history. */
+function onNavKeydown(e: KeyboardEvent) {
+  if (!e.altKey) return
+  if (e.key === 'ArrowLeft') {
+    e.preventDefault()
+    tabsStore.goBack()
+  } else if (e.key === 'ArrowRight') {
+    e.preventDefault()
+    tabsStore.goForward()
+  }
+}
+
+function onNavMouseUp(e: MouseEvent) {
+  if (e.button === 3) {
+    e.preventDefault()
+    tabsStore.goBack()
+  } else if (e.button === 4) {
+    e.preventDefault()
+    tabsStore.goForward()
+  }
+}
+
 onMounted(async () => {
   window.addEventListener('click', hideCtxMenu)
   window.addEventListener('resize', scheduleRecompute)
+  window.addEventListener('keydown', onNavKeydown)
+  window.addEventListener('mouseup', onNavMouseUp)
   unlistenDragDrop = await getCurrentWebview().onDragDropEvent(async (event) => {
     if (event.payload.type === 'enter' || event.payload.type === 'over') {
       dragOver.value = true
@@ -899,6 +923,8 @@ onMounted(async () => {
 onUnmounted(() => {
   window.removeEventListener('click', hideCtxMenu)
   window.removeEventListener('resize', scheduleRecompute)
+  window.removeEventListener('keydown', onNavKeydown)
+  window.removeEventListener('mouseup', onNavMouseUp)
   unlistenDragDrop?.()
 })
 
@@ -937,6 +963,32 @@ watch(viewMode, () => {
   <div class="remote-panel" :class="{ 'drag-over': dragOver }">
     <!-- Breadcrumb path bar -->
     <div class="path-bar" @contextmenu.prevent="onPathBarContextMenu">
+      <div class="nav-btns">
+        <button
+          class="toggle-btn nav-btn"
+          title="Back (Alt+←)"
+          :disabled="!tabsStore.canGoBack"
+          @click="tabsStore.goBack()"
+        >
+          ←
+        </button>
+        <button
+          class="toggle-btn nav-btn"
+          title="Forward (Alt+→)"
+          :disabled="!tabsStore.canGoForward"
+          @click="tabsStore.goForward()"
+        >
+          →
+        </button>
+        <button
+          class="toggle-btn nav-btn"
+          title="Up one level"
+          :disabled="currentPath === '/'"
+          @click="navigateTo(currentPath.slice(0, currentPath.lastIndexOf('/')) || '/')"
+        >
+          ↑
+        </button>
+      </div>
       <template v-if="pathEdit.active">
         <input
           ref="pathInputEl"
@@ -1330,6 +1382,27 @@ watch(viewMode, () => {
 .toggle-btn.active {
   background: #4f6ec2;
   color: #ffffff;
+}
+
+.nav-btns {
+  display: flex;
+  gap: 2px;
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+
+.nav-btn {
+  font-weight: 700;
+}
+
+.nav-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.nav-btn:disabled:hover {
+  background: none;
+  color: #6c7086;
 }
 
 .body {
