@@ -671,22 +671,21 @@ function entryIcon(e: FileEntry): string {
 }
 
 /** Mark the selection for a later Paste (in any session). */
-function ctxCopyFiles() {
+function copyFilesToClipboard() {
   const sid = sessionId.value
   const targets = selectedFiles.value.map((f) => f.path)
-  hideCtxMenu()
   if (!sid || targets.length === 0) return
   clipboard.set(sid, targets, tabsStore.activeTab?.label ?? '')
 }
 
-/** Paste into the right-clicked folder/blank dir, or the current directory. */
-async function ctxPasteFiles() {
-  const entry = ctxMenu.value.entry
-  const blankDir = ctxMenu.value.dir
+function ctxCopyFiles() {
   hideCtxMenu()
+  copyFilesToClipboard()
+}
+
+async function pasteClipboardInto(destDir: string) {
   const sid = sessionId.value
   if (!sid || !clipboard.sessionId || clipboard.paths.length === 0) return
-  const destDir = entry?.isDir ? entry.path : blankDir ?? currentPath.value
   try {
     await transferRemote(clipboard.sessionId, [...clipboard.paths], sid, destDir)
     await transferStore.syncTasks()
@@ -694,6 +693,15 @@ async function ctxPasteFiles() {
     console.error('Paste failed:', e)
     await message(`Paste failed: ${e}`, { title: 'Paste', kind: 'error' })
   }
+}
+
+/** Paste into the right-clicked folder/blank dir, or the current directory. */
+async function ctxPasteFiles() {
+  const entry = ctxMenu.value.entry
+  const blankDir = ctxMenu.value.dir
+  hideCtxMenu()
+  const destDir = entry?.isDir ? entry.path : blankDir ?? currentPath.value
+  await pasteClipboardInto(destDir)
 }
 
 /** Name of the folder Paste would target, for the menu label. */
@@ -895,10 +903,36 @@ function onNavMouseUp(e: MouseEvent) {
   }
 }
 
+/** Ctrl/Cmd+C copies the file selection, Ctrl/Cmd+V pastes into the current dir. */
+function onClipboardKeydown(e: KeyboardEvent) {
+  if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return
+  const key = e.key.toLowerCase()
+  if (key !== 'c' && key !== 'v') return
+  // Leave native copy/paste alone inside inputs, textareas and editables
+  const t = e.target as HTMLElement | null
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+  // Ctrl+C with a text selection (e.g. in the preview pane) stays native
+  if (key === 'c' && (window.getSelection()?.toString() ?? '') !== '') return
+  if (key === 'c') {
+    if (selectedFiles.value.length === 0) return
+    e.preventDefault()
+    copyFilesToClipboard()
+  } else {
+    if (!clipboard.sessionId || clipboard.paths.length === 0) return
+    e.preventDefault()
+    // Paste into the selected folder when exactly one folder is selected
+    const sel = selectedFiles.value
+    const only = sel.length === 1 ? sel[0] : undefined
+    const dest = only?.isDir ? only.path : currentPath.value
+    pasteClipboardInto(dest)
+  }
+}
+
 onMounted(async () => {
   window.addEventListener('click', hideCtxMenu)
   window.addEventListener('resize', scheduleRecompute)
   window.addEventListener('keydown', onNavKeydown)
+  window.addEventListener('keydown', onClipboardKeydown)
   window.addEventListener('mouseup', onNavMouseUp)
   unlistenDragDrop = await getCurrentWebview().onDragDropEvent(async (event) => {
     if (event.payload.type === 'enter' || event.payload.type === 'over') {
@@ -924,6 +958,7 @@ onUnmounted(() => {
   window.removeEventListener('click', hideCtxMenu)
   window.removeEventListener('resize', scheduleRecompute)
   window.removeEventListener('keydown', onNavKeydown)
+  window.removeEventListener('keydown', onClipboardKeydown)
   window.removeEventListener('mouseup', onNavMouseUp)
   unlistenDragDrop?.()
 })

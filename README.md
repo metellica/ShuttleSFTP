@@ -20,7 +20,7 @@ A fast, lightweight, cross-platform SFTP/SCP GUI built with **Tauri 2 + Vue 3 + 
 - 👁️ **File Preview** — Inline text preview pane with gray line numbers, soft wrap, copy support, and maximize/restore
 - ✏️ **Remote Quick-Edit** — Edit text files in place (paste/undo, Ctrl+S) and save straight back to the server
 - 🖱️ **Drag & Drop Upload** — Drag files or folders from your OS file manager to upload
-- 📥 **Copy / Paste Between Sessions** — Mark files with **Copy** in one tab, **Paste** them into any folder of any other tab (host, container or pod); blank-space right-click offers Paste / New Folder / Refresh
+- 📥 **Copy / Paste Between Sessions** — Mark files with **Copy** in one tab (right-click or Ctrl/Cmd+C), **Paste** them (right-click or Ctrl/Cmd+V) into any folder of any other tab (host, container or pod); blank-space right-click offers Paste / New Folder / Refresh
 - ⬇️ **Flexible Download** — Toolbar download, right-click **Download…** / **Save As…** context menu
 - 🗑️ **Delete with Confirmation** — Right-click → **Delete** removes selected files or folders (recursive) after a native confirmation dialog
 - 🗂️ **Directory Transfers** — Recursive folder upload/download/save-as, shown as an expandable tree in the queue
@@ -121,7 +121,7 @@ ShuttleSFTP/
 6. **Path bar**: click the empty area (or ✏️) to type a path directly — Enter navigates, Esc cancels. Use 📋 to copy the current path, or right-click the bar for **Copy Path / Paste & Go / Edit Path**
 7. **Upload**: Drag files or folders from your desktop/file manager into the app, or use the **Upload** / **Upload Folder** buttons
 8. **Download**: Select files or folders (Ctrl+click to multi-select, Shift+click for a range) → click Download, or right-click → **Download…** / **Save As…**
-9. **Copy between sessions**: right-click → **📋 Copy**, then navigate anywhere (another folder, another tab, into a container) and right-click → **📥 Paste** — or drag the selection onto a folder or onto another tab. Copies between two paths on the same host run server-side (no relay through your machine). Right-click blank space for **Paste / New Folder / Refresh**
+9. **Copy between sessions**: right-click → **📋 Copy** (or **Ctrl/Cmd+C**), then navigate anywhere (another folder, another tab, into a container) and right-click → **📥 Paste** (or **Ctrl/Cmd+V** — pastes into the current directory, or into the selected folder) — or drag the selection onto a folder or onto another tab. Copies between two paths on the same host run server-side (no relay through your machine). Right-click blank space for **Paste / New Folder / Refresh**
 10. **Delete**: Right-click the selection → **🗑 Delete** — a confirmation dialog appears before anything is removed (folders are deleted recursively)
 11. **Preview & edit**: Click a text file to preview it with line numbers and soft wrap — 🗖 maximizes the pane. Click ✏️ to edit in place (paste/undo work natively), then 💾 or Ctrl+S saves back to the server; ✕ discards
 12. **Bookmark**: Right-click a remote folder → **⭐ Add Bookmark** (alias defaults to the path; container/pod paths work too). Click **⭐ Bookmarks** in the toolbar to see all bookmarks (alias + remote + path) and connect or delete
