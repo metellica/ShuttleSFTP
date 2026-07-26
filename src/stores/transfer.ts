@@ -1,29 +1,56 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 import { listTransfers, clearFinishedTransfers } from '@/composables/useTauri'
 import type { TransferTask } from '@/types/transfer'
 
+/**
+ * Transfer queue state, tuned for tens of thousands of tasks.
+ *
+ * Tasks are plain (non-reactive) objects behind a shallowRef; event
+ * handlers mutate them at any rate cheaply. Consumers depend on a
+ * version counter that is bumped at most every 250ms, so heavy derived
+ * state (sorting, grouping) recomputes at a bounded frequency instead
+ * of once per backend event.
+ */
 export const useTransferStore = defineStore('transfer', () => {
-  const tasks = ref<TransferTask[]>([])
-  // id -> reactive task proxy, so per-event updates don't linearly
-  // scan a potentially huge queue.
+  const _tasks = shallowRef<TransferTask[]>([])
+  const version = ref(0)
+  // id -> task, so per-event updates don't scan the whole queue.
   let byId = new Map<string, TransferTask>()
 
-  function reindex() {
-    byId = new Map(tasks.value.map((t) => [t.id, t]))
+  let bumpTimer: ReturnType<typeof setTimeout> | null = null
+  /** Publish pending mutations to watchers, throttled. */
+  function bump() {
+    bumpTimer ??= setTimeout(() => {
+      bumpTimer = null
+      version.value++
+    }, 250)
   }
+
+  function reindex() {
+    byId = new Map(_tasks.value.map((t) => [t.id, t]))
+  }
+
+  /** Throttled view of the task list. */
+  const tasks = computed(() => {
+    void version.value
+    return _tasks.value
+  })
 
   /** Add a task if unknown (e.g. from a backend `transfer:queued` event). */
   function addTask(task: TransferTask) {
     if (byId.has(task.id)) return
-    tasks.value.push(task)
-    const stored = tasks.value[tasks.value.length - 1]
-    if (stored) byId.set(stored.id, stored)
+    _tasks.value.push(task)
+    byId.set(task.id, task)
+    bump()
   }
 
   function updateTask(taskId: string, updates: Partial<TransferTask>) {
     const task = byId.get(taskId)
-    if (task) Object.assign(task, updates)
+    if (task) {
+      Object.assign(task, updates)
+      bump()
+    }
   }
 
   /** O(1) lookup by task id. */
@@ -33,14 +60,16 @@ export const useTransferStore = defineStore('transfer', () => {
 
   function removeTask(taskId: string) {
     if (!byId.delete(taskId)) return
-    tasks.value = tasks.value.filter((t) => t.id !== taskId)
+    _tasks.value = _tasks.value.filter((t) => t.id !== taskId)
+    version.value++
   }
 
   async function clearCompleted() {
-    tasks.value = tasks.value.filter(
+    _tasks.value = _tasks.value.filter(
       (t) => t.status !== 'completed' && t.status !== 'cancelled'
     )
     reindex()
+    version.value++
     // Also drop them from the backend so they don't reappear after restart
     try {
       await clearFinishedTransfers()
@@ -51,9 +80,10 @@ export const useTransferStore = defineStore('transfer', () => {
 
   /** Pull the authoritative task list from the backend. */
   async function syncTasks() {
-    tasks.value = await listTransfers()
+    _tasks.value = await listTransfers()
     reindex()
+    version.value++
   }
 
-  return { tasks, addTask, updateTask, getTask, removeTask, clearCompleted, syncTasks }
+  return { tasks, version, addTask, updateTask, getTask, removeTask, clearCompleted, syncTasks }
 })
