@@ -1,6 +1,7 @@
 // Hide the console window on Windows in release builds
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use shuttle_sftp::commands::prepare::PrepareRegistry;
 use shuttle_sftp::ssh::SessionManager;
 use shuttle_sftp::transfer::TransferEngine;
 
@@ -12,6 +13,7 @@ fn main() {
         .plugin(tauri_plugin_fs::init())
         .manage(SessionManager::new())
         .manage(TransferEngine::new(3))
+        .manage(PrepareRegistry::default())
         .invoke_handler(tauri::generate_handler![
             shuttle_sftp::commands::connection::connect,
             shuttle_sftp::commands::connection::connect_local,
@@ -38,6 +40,7 @@ fn main() {
             shuttle_sftp::commands::transfer::clear_finished_transfers,
             shuttle_sftp::commands::transfer::show_in_folder,
             shuttle_sftp::commands::transfer::list_transfers,
+            shuttle_sftp::commands::prepare::cancel_prepare,
             shuttle_sftp::commands::config::load_ssh_config,
             shuttle_sftp::commands::config::list_profiles,
             shuttle_sftp::commands::config::save_profile,

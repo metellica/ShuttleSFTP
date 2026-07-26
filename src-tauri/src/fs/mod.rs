@@ -2,11 +2,13 @@ pub mod host;
 pub mod local;
 pub mod prefix;
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 
 /// File entry returned to the frontend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,6 +73,22 @@ pub trait RemoteFs: Send + Sync {
         None
     }
 
+    /// Shell command that enumerates every entry under `dir` when run
+    /// on the endpoint's host machine, printing NUL-terminated
+    /// `<f|d>\t<size>\t<relative path>` records (GNU find -printf
+    /// escapes). One round trip replaces a per-directory walk. None =
+    /// not expressible; runtime failures fall back to the walk.
+    fn server_scan_cmd(&self, _dir: &str) -> Option<String> {
+        None
+    }
+
+    /// Whether remove_dir_all is one fast server-side call (rm -rf,
+    /// native recursive delete). False = client-side recursion, which
+    /// callers can replace with a per-file progress-reporting delete.
+    fn fast_remove_dir(&self, _path: &str) -> bool {
+        true
+    }
+
     async fn stat(&self, path: &str) -> AppResult<FileStat>;
     async fn list_dir(&self, path: &str) -> AppResult<Vec<FileEntry>>;
     async fn mkdir(&self, path: &str) -> AppResult<()>;
@@ -106,14 +124,35 @@ pub fn mode_to_string(mode: u32) -> String {
     s
 }
 
-/// Walk a directory tree of any RemoteFs. Returns (dirs, files) as
-/// '/'-separated paths relative to `root`, both sorted shallow-first.
-pub async fn walk_fs_dir(fs: &dyn RemoteFs, root: &str) -> AppResult<(Vec<String>, Vec<String>)> {
+/// Walk a directory tree of any RemoteFs, listing directories
+/// concurrently to hide per-request latency (SFTP multiplexes requests
+/// on one session). Returns dirs as '/'-separated paths relative to
+/// `root` and files as (relative path, size) pairs, both sorted
+/// shallow-first. `on_file` is called once per discovered file; an Err
+/// aborts the walk (cancellation).
+pub async fn walk_fs_dir_concurrent(
+    fs: &Arc<dyn RemoteFs>,
+    root: &str,
+    mut on_file: impl FnMut() -> AppResult<()>,
+) -> AppResult<(Vec<String>, Vec<(String, u64)>)> {
+    const MAX_INFLIGHT: usize = 16;
     let mut dirs = Vec::new();
     let mut files = Vec::new();
-    let mut stack: Vec<(String, String)> = vec![(root.to_string(), String::new())];
-    while let Some((path, rel)) = stack.pop() {
-        for entry in fs.list_dir(&path).await? {
+    let mut pending: Vec<(String, String)> = vec![(root.to_string(), String::new())];
+    let mut inflight = tokio::task::JoinSet::new();
+    loop {
+        while inflight.len() < MAX_INFLIGHT {
+            let Some((path, rel)) = pending.pop() else { break };
+            let fs = fs.clone();
+            inflight.spawn(async move {
+                let res = fs.list_dir(&path).await;
+                (rel, res)
+            });
+        }
+        let Some(joined) = inflight.join_next().await else { break };
+        let (rel, res) =
+            joined.map_err(|e| AppError::IoError(format!("Scan task failed: {}", e)))?;
+        for entry in res? {
             let child_rel = if rel.is_empty() {
                 entry.name
             } else {
@@ -121,9 +160,10 @@ pub async fn walk_fs_dir(fs: &dyn RemoteFs, root: &str) -> AppResult<(Vec<String
             };
             if entry.is_dir {
                 dirs.push(child_rel.clone());
-                stack.push((entry.path, child_rel));
+                pending.push((entry.path, child_rel));
             } else {
-                files.push(child_rel);
+                on_file()?;
+                files.push((child_rel, entry.size));
             }
         }
     }

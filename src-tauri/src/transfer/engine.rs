@@ -29,6 +29,14 @@ pub enum Endpoint {
     },
 }
 
+/// One file of a batch queue operation (shared endpoints).
+pub struct BatchItem {
+    pub src_path: String,
+    pub dst_path: String,
+    pub group: Option<TaskGroup>,
+    pub total_bytes: u64,
+}
+
 impl Endpoint {
     async fn fs(&self) -> Arc<dyn RemoteFs> {
         match self {
@@ -159,6 +167,9 @@ impl TransferEngine {
     }
 
     /// Queue a copy between two endpoints and start it in the background.
+    /// `total_bytes` is the source size when already known (e.g. from a
+    /// directory listing), so queued tasks show correct totals before
+    /// they start; 0 means unknown, filled in by stat at transfer start.
     pub async fn queue_transfer(
         &self,
         app: tauri::AppHandle,
@@ -167,6 +178,7 @@ impl TransferEngine {
         dst: Endpoint,
         dst_path: &str,
         group: Option<TaskGroup>,
+        total_bytes: u64,
     ) -> AppResult<String> {
         let task_id = uuid::Uuid::new_v4().to_string();
 
@@ -200,7 +212,7 @@ impl TransferEngine {
             direction,
             source_path: src_path.to_string(),
             dest_path: dst_path.to_string(),
-            total_bytes: 0,
+            total_bytes,
             transferred_bytes: 0,
             status: TransferStatus::Queued,
         };
@@ -211,6 +223,84 @@ impl TransferEngine {
         let _ = app.emit("transfer:queued", &task);
         self.spawn_transfer(app, src, dst, task_id.clone());
         Ok(task_id)
+    }
+
+    /// Queue many copies between the same two endpoints in one shot:
+    /// one host/user lookup, one map lock, one frontend event. Use for
+    /// directory transfers, where per-file queue_transfer's IPC event
+    /// (and the frontend re-render it triggers) dominates queueing time.
+    pub async fn queue_transfer_batch(
+        &self,
+        app: tauri::AppHandle,
+        src: Endpoint,
+        dst: Endpoint,
+        items: Vec<BatchItem>,
+    ) -> AppResult<Vec<String>> {
+        if items.is_empty() {
+            return Ok(Vec::new());
+        }
+        let direction = match (&src, &dst) {
+            (Endpoint::Local, _) => TransferDirection::Upload,
+            (_, Endpoint::Local) => TransferDirection::Download,
+            _ => TransferDirection::Remote,
+        };
+        let primary = match direction {
+            TransferDirection::Upload => &dst,
+            _ => &src,
+        };
+        let (host, username) = primary.host_user().await;
+        let (dest_host, dest_username) = dst.host_user().await;
+        let session_id = primary.session_id().unwrap_or_default();
+        let dest_session_id = dst.session_id();
+        let created_at = now_millis();
+
+        let few = items.len() <= 20;
+        let mut task_ids = Vec::with_capacity(items.len());
+        let mut tasks_out = Vec::with_capacity(items.len());
+        for item in items {
+            let task_id = uuid::Uuid::new_v4().to_string();
+            let task = TransferTask {
+                id: task_id.clone(),
+                session_id: session_id.clone(),
+                dest_session_id: dest_session_id.clone(),
+                host: host.clone(),
+                username: username.clone(),
+                dest_host: dest_host.clone(),
+                dest_username: dest_username.clone(),
+                group_id: item.group.as_ref().map(|g| g.id.clone()),
+                group_name: item.group.as_ref().map(|g| g.name.clone()),
+                rel_path: item.group.map(|g| g.rel_path),
+                created_at,
+                delete_on_cancel: false,
+                direction: direction.clone(),
+                source_path: item.src_path,
+                dest_path: item.dst_path,
+                total_bytes: item.total_bytes,
+                transferred_bytes: 0,
+                status: TransferStatus::Queued,
+            };
+            task_ids.push(task_id);
+            tasks_out.push(task);
+        }
+        {
+            let mut map = self.tasks.lock().await;
+            for task in &tasks_out {
+                map.insert(task.id.clone(), task.clone());
+            }
+        }
+        schedule_persist(&self.tasks, &self.persist_pending);
+        if few {
+            for task in &tasks_out {
+                let _ = app.emit("transfer:queued", task);
+            }
+        } else {
+            // One bulk event: the frontend re-syncs the whole list once
+            let _ = app.emit("transfer:bulk-update", ());
+        }
+        for task in tasks_out {
+            self.spawn_transfer(app.clone(), src.clone(), dst.clone(), task.id);
+        }
+        Ok(task_ids)
     }
 
     fn spawn_transfer(&self, app: tauri::AppHandle, src: Endpoint, dst: Endpoint, task_id: String) {

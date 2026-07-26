@@ -25,8 +25,8 @@ export const listDir = (sessionId: string, path: string) =>
 export const mkDir = (sessionId: string, path: string) =>
   invoke<void>('mkdir', { sessionId, path })
 
-export const removeEntry = (sessionId: string, path: string, isDir: boolean) =>
-  invoke<void>('remove', { sessionId, path, isDir })
+export const removeEntry = (sessionId: string, path: string, isDir: boolean, prepareId?: string) =>
+  invoke<void>('remove', { sessionId, path, isDir, prepareId: prepareId ?? null })
 
 export const renameEntry = (sessionId: string, oldPath: string, newPath: string) =>
   invoke<void>('rename', { sessionId, oldPath, newPath })
@@ -38,22 +38,52 @@ export const saveFileContent = (sessionId: string, path: string, content: string
   invoke<void>('save_file', { sessionId, path, content })
 
 // Transfer
-export const uploadFiles = (sessionId: string, localPaths: string[], remoteDir: string) =>
-  invoke<string[]>('upload', { sessionId, localPaths, remoteDir })
+export const uploadFiles = (
+  sessionId: string,
+  localPaths: string[],
+  remoteDir: string,
+  prepareId?: string
+) => invoke<string[]>('upload', { sessionId, localPaths, remoteDir, prepareId: prepareId ?? null })
 
-export const downloadFiles = (sessionId: string, remotePaths: string[], localDir: string) =>
-  invoke<string[]>('download', { sessionId, remotePaths, localDir })
+export const downloadFiles = (
+  sessionId: string,
+  remotePaths: string[],
+  localDir: string,
+  prepareId?: string
+) =>
+  invoke<string[]>('download', { sessionId, remotePaths, localDir, prepareId: prepareId ?? null })
 
-export const downloadFileAs = (sessionId: string, remotePath: string, localPath: string) =>
-  invoke<string[]>('download_as', { sessionId, remotePath, localPath })
+export const downloadFileAs = (
+  sessionId: string,
+  remotePath: string,
+  localPath: string,
+  prepareId?: string
+) =>
+  invoke<string[]>('download_as', {
+    sessionId,
+    remotePath,
+    localPath,
+    prepareId: prepareId ?? null,
+  })
 
 export const transferRemote = (
   srcSessionId: string,
   srcPaths: string[],
   dstSessionId: string,
-  dstDir: string
+  dstDir: string,
+  prepareId?: string
 ) =>
-  invoke<string[]>('transfer_remote', { srcSessionId, srcPaths, dstSessionId, dstDir })
+  invoke<string[]>('transfer_remote', {
+    srcSessionId,
+    srcPaths,
+    dstSessionId,
+    dstDir,
+    prepareId: prepareId ?? null,
+  })
+
+/** Abort an in-flight preparation (queueing/deleting) by its id. */
+export const cancelPrepare = (prepareId: string) =>
+  invoke<void>('cancel_prepare', { prepareId })
 
 export const cancelTransfer = (taskId: string, deleteLocal = false) =>
   invoke<void>('cancel_transfer', { taskId, deleteLocal })

@@ -104,6 +104,13 @@ impl RemoteFs for SftpClient {
         Some(format!("cat > {}", crate::exec::shell_quote(path)))
     }
 
+    fn server_scan_cmd(&self, dir: &str) -> Option<String> {
+        Some(format!(
+            r"find {} -mindepth 1 -type f -printf 'f\t%s\t%P\0' -o -type d -printf 'd\t0\t%P\0'",
+            crate::exec::shell_quote(dir)
+        ))
+    }
+
     async fn stat(&self, path: &str) -> AppResult<FileStat> {
         let meta = self
             .sftp
@@ -190,6 +197,12 @@ impl RemoteFs for SftpClient {
                 .map_err(|e| AppError::SftpError(e.to_string()))?;
         }
         Ok(())
+    }
+
+    fn fast_remove_dir(&self, _path: &str) -> bool {
+        // Client-side recursion (above): callers may prefer the
+        // progress-reporting variant.
+        false
     }
 
     async fn rename(&self, old_path: &str, new_path: &str) -> AppResult<()> {

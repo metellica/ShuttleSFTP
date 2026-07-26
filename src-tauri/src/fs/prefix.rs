@@ -62,6 +62,10 @@ impl RemoteFs for PrefixFs {
         self.inner.server_write_cmd(&self.to_inner(path))
     }
 
+    fn server_scan_cmd(&self, dir: &str) -> Option<String> {
+        self.inner.server_scan_cmd(&self.to_inner(dir))
+    }
+
     async fn stat(&self, path: &str) -> AppResult<FileStat> {
         self.inner.stat(&self.to_inner(path)).await
     }
@@ -84,6 +88,10 @@ impl RemoteFs for PrefixFs {
 
     async fn remove_dir_all(&self, path: &str) -> AppResult<()> {
         self.inner.remove_dir_all(&self.to_inner(path)).await
+    }
+
+    fn fast_remove_dir(&self, path: &str) -> bool {
+        self.inner.fast_remove_dir(&self.to_inner(path))
     }
 
     async fn rename(&self, old_path: &str, new_path: &str) -> AppResult<()> {

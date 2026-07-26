@@ -6,17 +6,20 @@ import ConnectDialog from '@/components/connection/ConnectDialog.vue'
 import BookmarksDialog from '@/components/connection/BookmarksDialog.vue'
 import RemotePanel from '@/components/browser/RemotePanel.vue'
 import TransferQueue from '@/components/transfer/TransferQueue.vue'
+import PrepareOverlay from '@/components/layout/PrepareOverlay.vue'
 import { ref, onMounted, onUnmounted } from 'vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { uploadFiles, downloadFiles, mkDir, listBookmarks } from '@/composables/useTauri'
 import { promptText } from '@/composables/usePrompt'
 import { useTransferStore } from '@/stores/transfer'
+import { usePrepareStore, type PrepareProgressEvent } from '@/stores/prepare'
 import type { TransferProgress, TransferTask } from '@/types/transfer'
 import type { ConnectedMeta } from '@/types/connection'
 
 const tabsStore = useTabsStore()
 const transferStore = useTransferStore()
+const prepareStore = usePrepareStore()
 const showConnectDialog = ref(false)
 const showBookmarksDialog = ref(false)
 const remotePanelRef = ref<InstanceType<typeof RemotePanel> | null>(null)
@@ -47,6 +50,12 @@ onMounted(async () => {
   // Restore persisted transfers (interrupted ones come back as paused)
   transferStore.syncTasks().catch((e) => console.error('Cannot load transfers:', e))
 
+  unlisteners.push(
+    // Drives the blocking "Preparing…" overlay for bulk operations
+    await listen<PrepareProgressEvent>('prepare:progress', (e) => {
+      prepareStore.onProgress(e.payload)
+    })
+  )
   unlisteners.push(
     // Bulk operations (cancel/pause/resume all) send one event instead of
     // thousands of per-task events: re-sync the whole list once.
@@ -150,7 +159,9 @@ async function onUpload() {
 
   const paths = Array.isArray(selected) ? selected : [selected]
   try {
-    await uploadFiles(tab.sessionId, paths, tab.currentPath)
+    await prepareStore.run('Preparing upload', (pid) =>
+      uploadFiles(tab.sessionId!, paths, tab.currentPath, pid)
+    )
     await transferStore.syncTasks()
   } catch (e) {
     console.error('Upload failed:', e)
@@ -170,7 +181,9 @@ async function onUploadFolder() {
 
   const paths = Array.isArray(selected) ? selected : [selected]
   try {
-    await uploadFiles(tab.sessionId, paths, tab.currentPath)
+    await prepareStore.run('Preparing upload', (pid) =>
+      uploadFiles(tab.sessionId!, paths, tab.currentPath, pid)
+    )
     await transferStore.syncTasks()
   } catch (e) {
     console.error('Upload folder failed:', e)
@@ -192,7 +205,9 @@ async function onDownload() {
 
   const remotePaths = selectedFiles.map((f) => f.path)
   try {
-    await downloadFiles(tab.sessionId, remotePaths, localDir as string)
+    await prepareStore.run('Preparing download', (pid) =>
+      downloadFiles(tab.sessionId!, remotePaths, localDir as string, pid)
+    )
     await transferStore.syncTasks()
   } catch (e) {
     console.error('Download failed:', e)
@@ -241,6 +256,7 @@ async function onNewFolder() {
       </div>
     </main>
     <TransferQueue />
+    <PrepareOverlay />
     <ConnectDialog
       v-if="showConnectDialog"
       @close="showConnectDialog = false"

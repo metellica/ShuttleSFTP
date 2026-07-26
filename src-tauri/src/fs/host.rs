@@ -342,6 +342,26 @@ impl RemoteFs for HostFs {
         }
     }
 
+    fn server_scan_cmd(&self, dir: &str) -> Option<String> {
+        match self.route(dir) {
+            Route::Base(p) => self.base.server_scan_cmd(&p),
+            Route::Container(name, inner) => {
+                let map = self.containers.lock().unwrap();
+                let e = map.get(&name)?;
+                match &e.fs {
+                    Some(fs) => fs.server_scan_cmd(&inner),
+                    None => None,
+                }
+            }
+            Route::PodContainer(ns, pod, c, inner) => {
+                let key = format!("{}/{}/{}", ns, pod, c);
+                let map = self.pod_fs.lock().unwrap();
+                map.get(&key)?.server_scan_cmd(&inner)
+            }
+            _ => None,
+        }
+    }
+
     async fn stat(&self, path: &str) -> AppResult<FileStat> {
         match self.route(path) {
             Route::Base(p) => self.base.stat(&p).await,
@@ -456,6 +476,14 @@ impl RemoteFs for HostFs {
     async fn remove_dir_all(&self, path: &str) -> AppResult<()> {
         let (fs, inner) = self.resolve(path, "delete").await?;
         fs.remove_dir_all(&inner).await
+    }
+
+    fn fast_remove_dir(&self, path: &str) -> bool {
+        match self.route(path) {
+            Route::Base(p) => self.base.fast_remove_dir(&p),
+            // Containers/pods delete via exec `rm -rf`: fast
+            _ => true,
+        }
     }
 
     async fn rename(&self, old_path: &str, new_path: &str) -> AppResult<()> {

@@ -118,6 +118,14 @@ impl RemoteFs for LocalFs {
         "local"
     }
 
+    #[cfg(unix)]
+    fn server_scan_cmd(&self, dir: &str) -> Option<String> {
+        Some(format!(
+            r"find {} -mindepth 1 -type f -printf 'f\t%s\t%P\0' -o -type d -printf 'd\t0\t%P\0'",
+            crate::exec::shell_quote(dir)
+        ))
+    }
+
     async fn stat(&self, path: &str) -> AppResult<FileStat> {
         #[cfg(windows)]
         if is_virtual_root(path) {

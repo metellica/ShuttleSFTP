@@ -2,11 +2,13 @@
 import { ref } from 'vue'
 import { useTabsStore, type Tab } from '@/stores/tabs'
 import { useTransferStore } from '@/stores/transfer'
+import { usePrepareStore } from '@/stores/prepare'
 import { transferRemote } from '@/composables/useTauri'
 
 const emit = defineEmits<{ 'new-tab': [] }>()
 const tabsStore = useTabsStore()
 const transferStore = useTransferStore()
+const prepareStore = usePrepareStore()
 
 const KIND_ICONS: Record<string, string> = { ssh: '⌁', local: '💻' }
 
@@ -64,7 +66,9 @@ async function onTabDrop(tab: Tab, event: DragEvent) {
   try {
     const payload = JSON.parse(raw) as { sessionId: string; paths: string[] }
     if (!payload.sessionId || payload.sessionId === tab.sessionId) return
-    await transferRemote(payload.sessionId, payload.paths, tab.sessionId, tab.currentPath)
+    await prepareStore.run('Preparing copy', (pid) =>
+      transferRemote(payload.sessionId, payload.paths, tab.sessionId!, tab.currentPath, pid)
+    )
     await transferStore.syncTasks()
   } catch (e) {
     console.error('Cross-tab copy failed:', e)

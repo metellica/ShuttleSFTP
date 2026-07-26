@@ -500,6 +500,19 @@ impl RemoteFs for ExecFs {
         Some(crate::exec::shell_join(&argv))
     }
 
+    fn server_scan_cmd(&self, dir: &str) -> Option<String> {
+        // GNU find only; BusyBox images fail at runtime and the caller
+        // falls back to the per-directory walk.
+        let mut argv = self.target.exec_prefix();
+        argv.push("sh".into());
+        argv.push("-c".into());
+        argv.push(format!(
+            r"find {} -mindepth 1 -type f -printf 'f\t%s\t%P\0' -o -type d -printf 'd\t0\t%P\0'",
+            crate::exec::shell_quote(dir)
+        ));
+        Some(crate::exec::shell_join(&argv))
+    }
+
     async fn stat(&self, path: &str) -> AppResult<FileStat> {
         let argv = self.sh(r#"stat -c '%f|%s|%Y|%n' -- "$1""#, &[path]);
         let out = self.runner.run(&argv, None).await?.check("stat")?;

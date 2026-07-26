@@ -5,6 +5,7 @@ import { open, save, ask, message } from '@tauri-apps/plugin-dialog'
 import { useTabsStore } from '@/stores/tabs'
 import { useTransferStore } from '@/stores/transfer'
 import { useClipboardStore } from '@/stores/clipboard'
+import { usePrepareStore } from '@/stores/prepare'
 import { listDir, mkDir, uploadFiles, downloadFiles, downloadFileAs, previewFile, saveFileContent, saveBookmark, removeEntry, transferRemote } from '@/composables/useTauri'
 import { promptText } from '@/composables/usePrompt'
 import type { FileEntry, FilePreview } from '@/types/filesystem'
@@ -22,6 +23,7 @@ interface Column {
 const tabsStore = useTabsStore()
 const transferStore = useTransferStore()
 const clipboard = useClipboardStore()
+const prepareStore = usePrepareStore()
 const columns = ref<Column[]>([])
 const dragOver = ref(false)
 const selectedPaths = ref<Set<string>>(new Set())
@@ -653,7 +655,9 @@ async function ctxDownload() {
   if (!dir) return
 
   try {
-    await downloadFiles(sid, targets, dir as string)
+    await prepareStore.run('Preparing download', (pid) =>
+      downloadFiles(sid, targets, dir as string, pid)
+    )
     await transferStore.syncTasks()
   } catch (e) {
     console.error('Download failed:', e)
@@ -688,7 +692,9 @@ async function pasteClipboardInto(destDir: string) {
   const sid = sessionId.value
   if (!sid || !clipboard.sessionId || clipboard.paths.length === 0) return
   try {
-    await transferRemote(clipboard.sessionId, [...clipboard.paths], sid, destDir)
+    await prepareStore.run('Preparing copy', (pid) =>
+      transferRemote(clipboard.sessionId!, [...clipboard.paths], sid, destDir, pid)
+    )
     await transferStore.syncTasks()
   } catch (e) {
     console.error('Paste failed:', e)
@@ -777,7 +783,9 @@ async function onEntryDrop(entry: FileEntry, event: DragEvent) {
     if (!payload.sessionId || payload.paths.length === 0) return
     // Ignore dropping something onto itself
     if (payload.sessionId === sessionId.value && payload.paths.includes(entry.path)) return
-    await transferRemote(payload.sessionId, payload.paths, sessionId.value, entry.path)
+    await prepareStore.run('Preparing copy', (pid) =>
+      transferRemote(payload.sessionId, payload.paths, sessionId.value, entry.path, pid)
+    )
     await transferStore.syncTasks()
   } catch (e) {
     console.error('Drop copy failed:', e)
@@ -798,7 +806,9 @@ async function ctxSaveAs() {
   if (!target) return
 
   try {
-    await downloadFileAs(sid, entry.path, target)
+    await prepareStore.run('Preparing download', (pid) =>
+      downloadFileAs(sid, entry.path, target, pid)
+    )
     await transferStore.syncTasks()
   } catch (e) {
     console.error('Save As failed:', e)
@@ -825,13 +835,15 @@ async function ctxDelete() {
   if (!confirmed) return
 
   try {
-    for (const f of targets) {
-      await removeEntry(sid, f.path, f.isDir)
-      if (preview.value.entry?.path === f.path) {
-        preview.value = { entry: null, loading: false, data: null }
-        previewEdit.value = { active: false, text: '', saving: false }
+    await prepareStore.run('Deleting', async (pid) => {
+      for (const f of targets) {
+        await removeEntry(sid, f.path, f.isDir, pid)
+        if (preview.value.entry?.path === f.path) {
+          preview.value = { entry: null, loading: false, data: null }
+          previewEdit.value = { active: false, text: '', saving: false }
+        }
       }
-    }
+    })
   } catch (e) {
     console.error('Delete failed:', e)
     await message(`Delete failed: ${e}`, { title: 'Delete', kind: 'error' })
@@ -945,7 +957,9 @@ onMounted(async () => {
       const paths = event.payload.paths
       if (paths.length > 0 && sessionId.value) {
         try {
-          await uploadFiles(sessionId.value, paths, currentPath.value)
+          await prepareStore.run('Preparing upload', (pid) =>
+            uploadFiles(sessionId.value, paths, currentPath.value, pid)
+          )
           await transferStore.syncTasks()
         } catch (e) {
           console.error('Upload failed:', e)

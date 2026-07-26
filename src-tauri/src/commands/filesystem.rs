@@ -1,6 +1,8 @@
 use serde::Serialize;
 use tauri::State;
 
+use crate::commands::prepare::{Prepare, PrepareRegistry};
+use crate::commands::scan::scan_tree;
 use crate::error::AppResult;
 use crate::ssh::session::SessionManager;
 use crate::fs::FileEntry;
@@ -111,15 +113,45 @@ pub async fn remove(
     session_id: String,
     path: String,
     is_dir: bool,
+    prepare_id: Option<String>,
+    app: tauri::AppHandle,
     session_manager: State<'_, SessionManager>,
+    prepare_registry: State<'_, PrepareRegistry>,
 ) -> AppResult<()> {
     let session = session_manager.get_session(&session_id).await?;
-    let session = session.lock().await;
-    if is_dir {
-        session.fs.remove_dir_all(&path).await
-    } else {
-        session.fs.remove_file(&path).await
+    let (fs, runner) = {
+        let s = session.lock().await;
+        (s.fs.clone(), s.runner.clone())
+    };
+    if !is_dir {
+        return fs.remove_file(&path).await;
     }
+    let prep = Prepare::new(&app, &prepare_registry, prepare_id);
+    prep.check()?;
+    if fs.fast_remove_dir(&path) {
+        // One fast server-side call (rm -rf / native recursive delete):
+        // indeterminate progress, not cancellable mid-flight.
+        prep.set_phase("deleting", 0);
+        return fs.remove_dir_all(&path).await;
+    }
+    // Client-side recursion (SFTP): scan first for a file count, then
+    // delete per file with progress and cancellation.
+    prep.set_phase("scanning", 0);
+    let (dirs, files) = scan_tree(&fs, &runner, &path, &prep).await?;
+    prep.set_phase("deleting", files.len() as u64);
+    let root = path.trim_end_matches('/');
+    for (rel, _) in &files {
+        prep.check()?;
+        fs.remove_file(&format!("{}/{}", root, rel)).await?;
+        prep.tick();
+    }
+    // Dirs are empty now; children sort after their parent, so reverse
+    // lexicographic order removes deepest-first.
+    for d in dirs.iter().rev() {
+        prep.check()?;
+        fs.remove_dir_all(&format!("{}/{}", root, d)).await?;
+    }
+    fs.remove_dir_all(&path).await
 }
 
 #[tauri::command]

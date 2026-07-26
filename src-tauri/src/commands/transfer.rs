@@ -1,45 +1,54 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use tauri::{Emitter, State};
 use tokio::sync::Mutex;
 
+use crate::commands::prepare::{Prepare, PrepareRegistry, CANCELLED_MSG};
+use crate::commands::scan::scan_tree;
 use crate::error::{AppError, AppResult};
-use crate::fs::{walk_fs_dir, RemoteFs};
+use crate::exec::CommandRunner;
+use crate::fs::RemoteFs;
 use crate::ssh::session::{RemoteSession, SessionManager};
-use crate::transfer::engine::{Endpoint, TransferEngine};
+use crate::transfer::engine::{BatchItem, Endpoint, TransferEngine};
 use crate::transfer::progress::{TaskGroup, TransferDirection, TransferStatus, TransferTask};
 
-/// Walk a local directory tree. Returns (dirs, files) as '/'-separated
-/// paths relative to `root`, dirs sorted shallow-first.
-async fn walk_local_dir(root: &Path) -> AppResult<(Vec<String>, Vec<String>)> {
+/// Synchronous local tree walk on std::fs, for one spawn_blocking call:
+/// avoids tokio::fs's per-entry thread-pool dispatch. Progress goes to
+/// `count`; `cancel` aborts between entries.
+fn walk_local_sync(
+    root: &Path,
+    count: &AtomicU64,
+    cancel: &AtomicBool,
+) -> AppResult<(Vec<String>, Vec<(String, u64)>)> {
     let mut dirs = Vec::new();
     let mut files = Vec::new();
     let mut stack: Vec<(PathBuf, String)> = vec![(root.to_path_buf(), String::new())];
     while let Some((dir, rel)) = stack.pop() {
-        let mut rd = tokio::fs::read_dir(&dir)
-            .await
+        let rd = std::fs::read_dir(&dir)
             .map_err(|e| AppError::TransferError(format!("Cannot read local dir: {}", e)))?;
-        while let Some(entry) = rd
-            .next_entry()
-            .await
-            .map_err(|e| AppError::TransferError(format!("Cannot read local dir: {}", e)))?
-        {
+        for entry in rd {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(AppError::TransferError(CANCELLED_MSG.into()));
+            }
+            let entry = entry
+                .map_err(|e| AppError::TransferError(format!("Cannot read local dir: {}", e)))?;
             let name = entry.file_name().to_string_lossy().to_string();
             let child_rel = if rel.is_empty() {
                 name
             } else {
                 format!("{}/{}", rel, name)
             };
-            let ft = entry
-                .file_type()
-                .await
+            let meta = entry
+                .metadata()
                 .map_err(|e| AppError::TransferError(format!("Cannot stat local entry: {}", e)))?;
-            if ft.is_dir() {
+            if meta.is_dir() {
                 dirs.push(child_rel.clone());
                 stack.push((entry.path(), child_rel));
-            } else if ft.is_file() {
-                files.push(child_rel);
+            } else if meta.is_file() {
+                count.fetch_add(1, Ordering::Relaxed);
+                files.push((child_rel, meta.len()));
             }
             // symlinks and special files are skipped
         }
@@ -47,6 +56,33 @@ async fn walk_local_dir(root: &Path) -> AppResult<(Vec<String>, Vec<String>)> {
     dirs.sort();
     files.sort();
     Ok((dirs, files))
+}
+
+/// Walk a local directory tree on a blocking thread, relaying live
+/// progress and cancellation through `prep`. Returns dirs as
+/// '/'-separated paths relative to `root` and files as (relative path,
+/// size) pairs, sorted shallow-first.
+async fn walk_local_dir(
+    root: &Path,
+    prep: &Prepare<'_>,
+) -> AppResult<(Vec<String>, Vec<(String, u64)>)> {
+    let count = Arc::new(AtomicU64::new(0));
+    let cancel = prep.cancel_flag();
+    let (root2, count2) = (root.to_path_buf(), count.clone());
+    let mut task = tokio::task::spawn_blocking(move || walk_local_sync(&root2, &count2, &cancel));
+    let result = loop {
+        tokio::select! {
+            joined = &mut task => {
+                break joined
+                    .map_err(|e| AppError::TransferError(format!("Scan thread failed: {}", e)))??;
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(80)) => {
+                prep.set_done(count.load(Ordering::Relaxed));
+            }
+        }
+    };
+    prep.set_done(count.load(Ordering::Relaxed));
+    Ok(result)
 }
 
 fn rel_to_local(root: &Path, rel: &str) -> PathBuf {
@@ -59,6 +95,48 @@ fn rel_to_local(root: &Path, rel: &str) -> PathBuf {
 
 async fn session_fs(session: &Arc<Mutex<RemoteSession>>) -> Arc<dyn RemoteFs> {
     session.lock().await.fs.clone()
+}
+
+async fn session_fs_runner(
+    session: &Arc<Mutex<RemoteSession>>,
+) -> (Arc<dyn RemoteFs>, Arc<dyn CommandRunner>) {
+    let s = session.lock().await;
+    (s.fs.clone(), s.runner.clone())
+}
+
+/// Create a directory tree, level by level: parents strictly before
+/// children, dirs within one level concurrently (hides per-mkdir
+/// latency). "Already exists" failures are ignored, like before.
+async fn mkdir_tree(
+    fs: &Arc<dyn RemoteFs>,
+    root: &str,
+    dirs: &[String],
+    prep: &Prepare<'_>,
+) -> AppResult<()> {
+    let _ = fs.mkdir(root).await;
+    let mut levels: Vec<Vec<String>> = Vec::new();
+    for d in dirs {
+        let depth = d.matches('/').count();
+        while levels.len() <= depth {
+            levels.push(Vec::new());
+        }
+        levels[depth].push(format!("{}/{}", root, d));
+    }
+    for level in levels {
+        prep.check()?;
+        let mut inflight = tokio::task::JoinSet::new();
+        for path in level {
+            let fs = fs.clone();
+            inflight.spawn(async move {
+                let _ = fs.mkdir(&path).await;
+            });
+            if inflight.len() >= 16 {
+                let _ = inflight.join_next().await;
+            }
+        }
+        while inflight.join_next().await.is_some() {}
+    }
+    Ok(())
 }
 
 fn endpoint(session_id: &str, session: Arc<Mutex<RemoteSession>>) -> Endpoint {
@@ -77,6 +155,7 @@ async fn queue_dir_upload(
     session_id: &str,
     local_dir: &Path,
     remote_parent: &str,
+    prep: &Prepare<'_>,
 ) -> AppResult<Vec<String>> {
     let dir_name = local_dir
         .file_name()
@@ -84,40 +163,40 @@ async fn queue_dir_upload(
         .to_string_lossy()
         .to_string();
     let remote_root = format!("{}/{}", remote_parent.trim_end_matches('/'), dir_name);
-    let (dirs, files) = walk_local_dir(local_dir).await?;
+    prep.set_phase("scanning", 0);
+    let (dirs, files) = walk_local_dir(local_dir, prep).await?;
 
     {
         let fs = session_fs(&session).await;
-        // Ignore "already exists" failures
-        let _ = fs.mkdir(&remote_root).await;
-        for d in &dirs {
-            let _ = fs.mkdir(&format!("{}/{}", remote_root, d)).await;
-        }
+        mkdir_tree(&fs, &remote_root, &dirs, prep).await?;
     }
 
+    prep.set_phase("queueing", files.len() as u64);
     let group_id = uuid::Uuid::new_v4().to_string();
-    let mut task_ids = Vec::new();
-    for rel in files {
+    let mut items = Vec::with_capacity(files.len());
+    for (rel, size) in files {
+        prep.check()?;
         let local = rel_to_local(local_dir, &rel);
-        let remote = format!("{}/{}", remote_root, rel);
-        let group = TaskGroup {
-            id: group_id.clone(),
-            name: dir_name.clone(),
-            rel_path: rel,
-        };
-        let id = transfer_engine
-            .queue_transfer(
-                app.clone(),
-                Endpoint::Local,
-                &local.to_string_lossy(),
-                endpoint(session_id, session.clone()),
-                &remote,
-                Some(group),
-            )
-            .await?;
-        task_ids.push(id);
+        items.push(BatchItem {
+            src_path: local.to_string_lossy().to_string(),
+            dst_path: format!("{}/{}", remote_root, rel),
+            group: Some(TaskGroup {
+                id: group_id.clone(),
+                name: dir_name.clone(),
+                rel_path: rel,
+            }),
+            total_bytes: size,
+        });
+        prep.tick();
     }
-    Ok(task_ids)
+    transfer_engine
+        .queue_transfer_batch(
+            app.clone(),
+            Endpoint::Local,
+            endpoint(session_id, session.clone()),
+            items,
+        )
+        .await
 }
 
 /// Queue every file of a remote directory as one transfer group,
@@ -129,54 +208,64 @@ async fn queue_dir_download(
     session_id: &str,
     remote_dir: &str,
     local_root: &Path,
+    prep: &Prepare<'_>,
 ) -> AppResult<Vec<String>> {
     let dir_name = local_root
         .file_name()
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
+    prep.set_phase("scanning", 0);
     let (dirs, files) = {
-        let fs = session_fs(&session).await;
-        walk_fs_dir(fs.as_ref(), remote_dir).await?
+        let (fs, runner) = session_fs_runner(&session).await;
+        scan_tree(&fs, &runner, remote_dir, prep).await?
     };
 
     tokio::fs::create_dir_all(local_root)
         .await
         .map_err(|e| AppError::TransferError(format!("Cannot create local dir: {}", e)))?;
     for d in &dirs {
+        prep.check()?;
         tokio::fs::create_dir_all(rel_to_local(local_root, d))
             .await
             .map_err(|e| AppError::TransferError(format!("Cannot create local dir: {}", e)))?;
     }
 
+    prep.set_phase("queueing", files.len() as u64);
     let group_id = uuid::Uuid::new_v4().to_string();
-    let mut task_ids = Vec::new();
-    for rel in files {
-        let remote = format!("{}/{}", remote_dir.trim_end_matches('/'), rel);
+    let mut items = Vec::with_capacity(files.len());
+    for (rel, size) in files {
+        prep.check()?;
         let local = rel_to_local(local_root, &rel);
-        let group = TaskGroup {
-            id: group_id.clone(),
-            name: dir_name.clone(),
-            rel_path: rel,
-        };
-        let id = transfer_engine
-            .queue_transfer(
-                app.clone(),
-                endpoint(session_id, session.clone()),
-                &remote,
-                Endpoint::Local,
-                &local.to_string_lossy(),
-                Some(group),
-            )
-            .await?;
-        task_ids.push(id);
+        items.push(BatchItem {
+            src_path: format!("{}/{}", remote_dir.trim_end_matches('/'), rel),
+            dst_path: local.to_string_lossy().to_string(),
+            group: Some(TaskGroup {
+                id: group_id.clone(),
+                name: dir_name.clone(),
+                rel_path: rel,
+            }),
+            total_bytes: size,
+        });
+        prep.tick();
     }
-    Ok(task_ids)
+    transfer_engine
+        .queue_transfer_batch(
+            app.clone(),
+            endpoint(session_id, session.clone()),
+            Endpoint::Local,
+            items,
+        )
+        .await
 }
 
-async fn is_remote_dir(session: &Arc<Mutex<RemoteSession>>, path: &str) -> bool {
+/// Stat a remote path, returning None when it does not exist.
+async fn remote_stat(
+    session: &Arc<Mutex<RemoteSession>>,
+    path: &str,
+) -> Option<crate::fs::FileStat> {
     let fs = session_fs(session).await;
-    fs.stat(path).await.map(|m| m.is_dir).unwrap_or(false)
+    fs.stat(path).await.ok()
 }
 
 #[tauri::command]
@@ -184,18 +273,20 @@ pub async fn upload(
     session_id: String,
     local_paths: Vec<String>,
     remote_dir: String,
+    prepare_id: Option<String>,
     app: tauri::AppHandle,
     session_manager: State<'_, SessionManager>,
     transfer_engine: State<'_, TransferEngine>,
+    prepare_registry: State<'_, PrepareRegistry>,
 ) -> AppResult<Vec<String>> {
+    let prep = Prepare::new(&app, &prepare_registry, prepare_id);
     let mut task_ids = Vec::new();
     for local_path in &local_paths {
+        prep.check()?;
         let session = session_manager.get_session(&session_id).await?;
         let path = Path::new(local_path);
-        let is_dir = tokio::fs::metadata(path)
-            .await
-            .map(|m| m.is_dir())
-            .unwrap_or(false);
+        let meta = tokio::fs::metadata(path).await.ok();
+        let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
         if is_dir {
             let ids = queue_dir_upload(
                 &app,
@@ -204,6 +295,7 @@ pub async fn upload(
                 &session_id,
                 path,
                 &remote_dir,
+                &prep,
             )
             .await?;
             task_ids.extend(ids);
@@ -218,6 +310,7 @@ pub async fn upload(
                     endpoint(&session_id, session),
                     &remote_path,
                     None,
+                    meta.map(|m| m.len()).unwrap_or(0),
                 )
                 .await?;
             task_ids.push(task_id);
@@ -231,19 +324,24 @@ pub async fn download(
     session_id: String,
     remote_paths: Vec<String>,
     local_dir: String,
+    prepare_id: Option<String>,
     app: tauri::AppHandle,
     session_manager: State<'_, SessionManager>,
     transfer_engine: State<'_, TransferEngine>,
+    prepare_registry: State<'_, PrepareRegistry>,
 ) -> AppResult<Vec<String>> {
+    let prep = Prepare::new(&app, &prepare_registry, prepare_id);
     let mut task_ids = Vec::new();
     for remote_path in &remote_paths {
+        prep.check()?;
         let filename = remote_path
             .rsplit('/')
             .next()
             .unwrap_or("file");
         let local_path = Path::new(&local_dir).join(filename);
         let session = session_manager.get_session(&session_id).await?;
-        if is_remote_dir(&session, remote_path).await {
+        let stat = remote_stat(&session, remote_path).await;
+        if stat.as_ref().map(|s| s.is_dir).unwrap_or(false) {
             let ids = queue_dir_download(
                 &app,
                 transfer_engine.inner(),
@@ -251,6 +349,7 @@ pub async fn download(
                 &session_id,
                 remote_path,
                 &local_path,
+                &prep,
             )
             .await?;
             task_ids.extend(ids);
@@ -263,6 +362,7 @@ pub async fn download(
                     Endpoint::Local,
                     &local_path.to_string_lossy(),
                     None,
+                    stat.map(|s| s.size).unwrap_or(0),
                 )
                 .await?;
             task_ids.push(task_id);
@@ -277,12 +377,16 @@ pub async fn download_as(
     session_id: String,
     remote_path: String,
     local_path: String,
+    prepare_id: Option<String>,
     app: tauri::AppHandle,
     session_manager: State<'_, SessionManager>,
     transfer_engine: State<'_, TransferEngine>,
+    prepare_registry: State<'_, PrepareRegistry>,
 ) -> AppResult<Vec<String>> {
+    let prep = Prepare::new(&app, &prepare_registry, prepare_id);
     let session = session_manager.get_session(&session_id).await?;
-    if is_remote_dir(&session, &remote_path).await {
+    let stat = remote_stat(&session, &remote_path).await;
+    if stat.as_ref().map(|s| s.is_dir).unwrap_or(false) {
         queue_dir_download(
             &app,
             transfer_engine.inner(),
@@ -290,6 +394,7 @@ pub async fn download_as(
             &session_id,
             &remote_path,
             Path::new(&local_path),
+            &prep,
         )
         .await
     } else {
@@ -301,6 +406,7 @@ pub async fn download_as(
                 Endpoint::Local,
                 &local_path,
                 None,
+                stat.map(|s| s.size).unwrap_or(0),
             )
             .await?;
         Ok(vec![task_id])
@@ -317,9 +423,11 @@ pub async fn transfer_remote(
     src_paths: Vec<String>,
     dst_session_id: String,
     dst_dir: String,
+    prepare_id: Option<String>,
     app: tauri::AppHandle,
     session_manager: State<'_, SessionManager>,
     transfer_engine: State<'_, TransferEngine>,
+    prepare_registry: State<'_, PrepareRegistry>,
 ) -> AppResult<Vec<String>> {
     if src_session_id == dst_session_id && src_paths.iter().any(|p| {
         let name = p.rsplit('/').next().unwrap_or("");
@@ -329,46 +437,54 @@ pub async fn transfer_remote(
             "Source and destination are the same file".into(),
         ));
     }
+    let prep = Prepare::new(&app, &prepare_registry, prepare_id);
     let src_session = session_manager.get_session(&src_session_id).await?;
     let dst_session = session_manager.get_session(&dst_session_id).await?;
     let mut task_ids = Vec::new();
 
     for src_path in &src_paths {
+        prep.check()?;
         let name = src_path.rsplit('/').next().unwrap_or("file");
         let dst_path = format!("{}/{}", dst_dir.trim_end_matches('/'), name);
 
-        if is_remote_dir(&src_session, src_path).await {
+        let stat = remote_stat(&src_session, src_path).await;
+        if stat.as_ref().map(|s| s.is_dir).unwrap_or(false) {
             // Recreate the tree on the destination, then queue each file.
+            prep.set_phase("scanning", 0);
             let (dirs, files) = {
-                let fs = session_fs(&src_session).await;
-                walk_fs_dir(fs.as_ref(), src_path).await?
+                let (fs, runner) = session_fs_runner(&src_session).await;
+                scan_tree(&fs, &runner, src_path, &prep).await?
             };
             {
                 let fs = session_fs(&dst_session).await;
-                let _ = fs.mkdir(&dst_path).await;
-                for d in &dirs {
-                    let _ = fs.mkdir(&format!("{}/{}", dst_path, d)).await;
-                }
+                mkdir_tree(&fs, &dst_path, &dirs, &prep).await?;
             }
+            prep.set_phase("queueing", files.len() as u64);
             let group_id = uuid::Uuid::new_v4().to_string();
-            for rel in files {
-                let group = TaskGroup {
-                    id: group_id.clone(),
-                    name: name.to_string(),
-                    rel_path: rel.clone(),
-                };
-                let id = transfer_engine
-                    .queue_transfer(
-                        app.clone(),
-                        endpoint(&src_session_id, src_session.clone()),
-                        &format!("{}/{}", src_path.trim_end_matches('/'), rel),
-                        endpoint(&dst_session_id, dst_session.clone()),
-                        &format!("{}/{}", dst_path, rel),
-                        Some(group),
-                    )
-                    .await?;
-                task_ids.push(id);
+            let mut items = Vec::with_capacity(files.len());
+            for (rel, size) in files {
+                prep.check()?;
+                items.push(BatchItem {
+                    src_path: format!("{}/{}", src_path.trim_end_matches('/'), rel),
+                    dst_path: format!("{}/{}", dst_path, rel),
+                    group: Some(TaskGroup {
+                        id: group_id.clone(),
+                        name: name.to_string(),
+                        rel_path: rel,
+                    }),
+                    total_bytes: size,
+                });
+                prep.tick();
             }
+            let ids = transfer_engine
+                .queue_transfer_batch(
+                    app.clone(),
+                    endpoint(&src_session_id, src_session.clone()),
+                    endpoint(&dst_session_id, dst_session.clone()),
+                    items,
+                )
+                .await?;
+            task_ids.extend(ids);
         } else {
             let id = transfer_engine
                 .queue_transfer(
@@ -378,6 +494,7 @@ pub async fn transfer_remote(
                     endpoint(&dst_session_id, dst_session.clone()),
                     &dst_path,
                     None,
+                    stat.map(|s| s.size).unwrap_or(0),
                 )
                 .await?;
             task_ids.push(id);
