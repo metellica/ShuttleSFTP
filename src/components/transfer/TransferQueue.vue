@@ -9,6 +9,8 @@ import {
   resumeAllTransfers,
   cancelAllTransfers,
   cancelTransferGroup,
+  pauseTransferGroup,
+  resumeTransferGroup,
   showInFolder,
 } from '@/composables/useTauri'
 import { connectForTransferTask } from '@/composables/useAutoConnect'
@@ -163,37 +165,34 @@ async function onCancel(task: TransferTask) {
 }
 
 async function onPauseGroup(group: GroupNode) {
-  const targets = group.tasks.filter((t) => t.status === 'active' || t.status === 'queued')
-  await Promise.allSettled(targets.map((t) => pauseTransfer(t.id)))
+  try {
+    await pauseTransferGroup(group.id)
+  } catch (e) {
+    console.error('Pause folder failed:', e)
+  }
 }
 
 async function onResumeGroup(group: GroupNode) {
-  let sessionId: string | undefined
-  let failed = 0
-  for (const t of group.tasks.filter(
-    (t) => t.status === 'paused' || t.status === 'failed'
-  )) {
-    try {
-      await resumeTransfer(t.id, sessionId)
-    } catch {
-      // No live session: auto-connect once, then reuse that session
-      if (sessionId === undefined) {
-        const sid = await connectForTransferTask(t)
-        if (sid) {
-          sessionId = sid
-          try {
-            await resumeTransfer(t.id, sid)
-            continue
-          } catch (e2) {
-            console.error('Resume failed:', e2)
-          }
-        }
-      }
-      failed++
+  try {
+    const resumed = new Set(await resumeTransferGroup(group.id))
+    const remaining = transferStore.tasks.filter(
+      (t) =>
+        t.groupId === group.id &&
+        (t.status === 'paused' || t.status === 'failed') &&
+        !resumed.has(t.id)
+    )
+    if (remaining.length === 0) return
+
+    // No live session for these tasks: auto-connect once, then retry
+    const first = remaining[0]
+    const connected = first ? await connectForTransferTask(first) : null
+    const retried = new Set(connected ? await resumeTransferGroup(group.id) : [])
+    const stuck = remaining.filter((t) => !retried.has(t.id))
+    if (stuck.length > 0) {
+      await message(`${stuck.length} file(s) could not be resumed: connect to the matching server first.`, { title: 'Transfer', kind: 'warning' })
     }
-  }
-  if (failed > 0) {
-    await message(`${failed} file(s) could not be resumed: connect to the matching server first.`, { title: 'Transfer', kind: 'warning' })
+  } catch (e) {
+    console.error('Resume folder failed:', e)
   }
 }
 
@@ -214,7 +213,7 @@ async function onCancelGroup(group: GroupNode) {
       )
       await cancelTransferGroup(group.id, deleteLocal)
     } else {
-      await Promise.allSettled(targets.map((t) => cancelTransfer(t.id)))
+      await cancelTransferGroup(group.id)
     }
   } catch (e) {
     console.error('Cancel folder failed:', e)
@@ -254,8 +253,10 @@ async function onResumeAll() {
 
     const groups = new Map<string, TransferTask>()
     for (const t of remaining) {
-      if (t.host && !groups.has(`${t.username}@${t.host}`)) {
-        groups.set(`${t.username}@${t.host}`, t)
+      // One representative task per src->dst endpoint pair
+      const key = `${t.username}@${t.host}->${t.destUsername ?? ''}@${t.destHost ?? ''}`
+      if (t.host && !groups.has(key)) {
+        groups.set(key, t)
       }
     }
     let connected = false

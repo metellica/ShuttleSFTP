@@ -48,6 +48,20 @@ onMounted(async () => {
   transferStore.syncTasks().catch((e) => console.error('Cannot load transfers:', e))
 
   unlisteners.push(
+    // Bulk operations (cancel/pause/resume all) send one event instead of
+    // thousands of per-task events: re-sync the whole list once.
+    await listen('transfer:bulk-update', () => {
+      transferStore.syncTasks().catch((e) => console.error('Cannot sync transfers:', e))
+    })
+  )
+  unlisteners.push(
+    // Emitted per queued file: makes the queue bar appear immediately,
+    // even while a long multi-file transfer command is still queueing.
+    await listen<TransferTask>('transfer:queued', (e) => {
+      transferStore.addTask(e.payload)
+    })
+  )
+  unlisteners.push(
     await listen<TransferProgress>('transfer:progress', (e) => {
       transferStore.updateTask(e.payload.taskId, {
         transferredBytes: e.payload.transferredBytes,

@@ -7,6 +7,8 @@ export interface TransferTask {
   username?: string
   /** Destination host label ("local" for downloads). */
   destHost?: string
+  /** Destination username, for remote-to-remote copies. */
+  destUsername?: string
   /** Set when this task is part of a directory transfer. */
   groupId?: string
   groupName?: string

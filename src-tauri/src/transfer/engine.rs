@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -118,6 +119,21 @@ fn now_millis() -> u64 {
         .unwrap_or(0)
 }
 
+/// Persist soon, coalescing bursts: queueing a large directory would
+/// otherwise rewrite the whole task file once per queued file.
+fn schedule_persist(tasks: &TaskMap, pending: &Arc<AtomicBool>) {
+    if pending.swap(true, Ordering::SeqCst) {
+        return; // a persist is already scheduled
+    }
+    let tasks = tasks.clone();
+    let pending = pending.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        pending.store(false, Ordering::SeqCst);
+        persist_tasks(&tasks).await;
+    });
+}
+
 /// Manages the transfer queue and executes copy tasks between any two
 /// endpoints (local machine, SSH hosts, containers, pods).
 pub struct TransferEngine {
@@ -127,6 +143,8 @@ pub struct TransferEngine {
     running: RunningSet,
     /// group_id -> local root dir to delete once no group member is running.
     pending_group_deletes: PendingDeletes,
+    /// Set while a debounced persist of the task list is scheduled.
+    persist_pending: Arc<AtomicBool>,
 }
 
 impl TransferEngine {
@@ -136,6 +154,7 @@ impl TransferEngine {
             semaphore: Arc::new(Semaphore::new(max_concurrent)),
             running: Arc::new(Mutex::new(HashSet::new())),
             pending_group_deletes: Arc::new(Mutex::new(HashMap::new())),
+            persist_pending: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -163,7 +182,7 @@ impl TransferEngine {
             _ => &src,
         };
         let (host, username) = primary.host_user().await;
-        let (dest_host, _) = dst.host_user().await;
+        let (dest_host, dest_username) = dst.host_user().await;
 
         let task = TransferTask {
             id: task_id.clone(),
@@ -172,6 +191,7 @@ impl TransferEngine {
             host,
             username,
             dest_host,
+            dest_username,
             group_id: group.as_ref().map(|g| g.id.clone()),
             group_name: group.as_ref().map(|g| g.name.clone()),
             rel_path: group.map(|g| g.rel_path),
@@ -184,8 +204,11 @@ impl TransferEngine {
             transferred_bytes: 0,
             status: TransferStatus::Queued,
         };
-        self.tasks.lock().await.insert(task_id.clone(), task);
-        persist_tasks(&self.tasks).await;
+        self.tasks.lock().await.insert(task_id.clone(), task.clone());
+        schedule_persist(&self.tasks, &self.persist_pending);
+        // Tell the frontend right away so the queue UI shows the task even
+        // while a long multi-file queueing call is still in progress.
+        let _ = app.emit("transfer:queued", &task);
         self.spawn_transfer(app, src, dst, task_id.clone());
         Ok(task_id)
     }
@@ -341,14 +364,59 @@ impl TransferEngine {
                 })
                 .collect()
         };
-        for id in &paused {
-            let _ = app.emit(
-                "transfer:status",
-                StatusEvent {
-                    task_id: id.clone(),
-                    status: TransferStatus::Paused,
-                },
-            );
+        if paused.len() > 20 {
+            // Large backlogs: one bulk event instead of flooding the UI
+            let _ = app.emit("transfer:bulk-update", ());
+        } else {
+            for id in &paused {
+                let _ = app.emit(
+                    "transfer:status",
+                    StatusEvent {
+                        task_id: id.clone(),
+                        status: TransferStatus::Paused,
+                    },
+                );
+            }
+        }
+        if !paused.is_empty() {
+            persist_tasks(&self.tasks).await;
+        }
+        Ok(paused)
+    }
+
+    /// Pause every queued/active task of a directory transfer group.
+    pub async fn pause_group(
+        &self,
+        app: &tauri::AppHandle,
+        group_id: &str,
+    ) -> AppResult<Vec<String>> {
+        let paused: Vec<String> = {
+            let mut tasks = self.tasks.lock().await;
+            tasks
+                .values_mut()
+                .filter(|t| {
+                    t.group_id.as_deref() == Some(group_id)
+                        && matches!(t.status, TransferStatus::Queued | TransferStatus::Active)
+                })
+                .map(|t| {
+                    t.status = TransferStatus::Paused;
+                    t.id.clone()
+                })
+                .collect()
+        };
+        if paused.len() > 20 {
+            // Large groups: one bulk event instead of flooding the UI
+            let _ = app.emit("transfer:bulk-update", ());
+        } else {
+            for id in &paused {
+                let _ = app.emit(
+                    "transfer:status",
+                    StatusEvent {
+                        task_id: id.clone(),
+                        status: TransferStatus::Paused,
+                    },
+                );
+            }
         }
         if !paused.is_empty() {
             persist_tasks(&self.tasks).await;
@@ -358,13 +426,15 @@ impl TransferEngine {
 
     /// Resume a paused (or failed) transfer on the given endpoints.
     /// The transfer picks up from the destination file's current size
-    /// when both endpoints support it.
+    /// when both endpoints support it. With `quiet`, no per-task status
+    /// event is emitted (bulk callers send one bulk event instead).
     pub async fn resume(
         &self,
         app: tauri::AppHandle,
         task_id: &str,
         src: Endpoint,
         dst: Endpoint,
+        quiet: bool,
     ) -> AppResult<()> {
         {
             let mut tasks = self.tasks.lock().await;
@@ -384,14 +454,18 @@ impl TransferEngine {
             task.session_id = primary.session_id().unwrap_or_default();
             task.dest_session_id = dst.session_id();
         }
-        let _ = app.emit(
-            "transfer:status",
-            StatusEvent {
-                task_id: task_id.to_string(),
-                status: TransferStatus::Queued,
-            },
-        );
-        persist_tasks(&self.tasks).await;
+        if !quiet {
+            let _ = app.emit(
+                "transfer:status",
+                StatusEvent {
+                    task_id: task_id.to_string(),
+                    status: TransferStatus::Queued,
+                },
+            );
+        }
+        // Debounced: resume-all over a large backlog would otherwise
+        // rewrite the whole task file once per task.
+        schedule_persist(&self.tasks, &self.persist_pending);
         self.spawn_transfer(app, src, dst, task_id.to_string());
         Ok(())
     }
@@ -444,7 +518,7 @@ impl TransferEngine {
     /// transfer groups have their whole local root dir removed instead.
     pub async fn cancel_all(&self, app: &tauri::AppHandle, delete_local: bool) -> AppResult<()> {
         let mut group_roots: HashMap<String, String> = HashMap::new();
-        let cancelled: Vec<(String, bool)> = {
+        let cancelled: Vec<(String, bool, bool)> = {
             let mut tasks = self.tasks.lock().await;
             tasks
                 .values_mut()
@@ -471,19 +545,27 @@ impl TransferEngine {
                     } else {
                         t.delete_on_cancel = false;
                     }
-                    (t.id.clone(), was_active)
+                    (t.id.clone(), was_active, t.delete_on_cancel)
                 })
                 .collect()
         };
-        for (id, was_active) in &cancelled {
-            let _ = app.emit(
-                "transfer:status",
-                StatusEvent {
-                    task_id: id.clone(),
-                    status: TransferStatus::Cancelled,
-                },
-            );
-            if !was_active {
+        // Per-task events make the frontend re-render the queue thousands
+        // of times for large backlogs: send one bulk event instead.
+        if cancelled.len() > 20 {
+            let _ = app.emit("transfer:bulk-update", ());
+        } else {
+            for (id, _, _) in &cancelled {
+                let _ = app.emit(
+                    "transfer:status",
+                    StatusEvent {
+                        task_id: id.clone(),
+                        status: TransferStatus::Cancelled,
+                    },
+                );
+            }
+        }
+        for (id, was_active, delete) in &cancelled {
+            if !was_active && *delete {
                 cleanup_cancelled(&self.tasks, id).await;
             }
         }
@@ -536,14 +618,19 @@ impl TransferEngine {
                 }
             }
         }
-        for id in &cancelled_ids {
-            let _ = app.emit(
-                "transfer:status",
-                StatusEvent {
-                    task_id: id.clone(),
-                    status: TransferStatus::Cancelled,
-                },
-            );
+        if cancelled_ids.len() > 20 {
+            // Large groups: one bulk event instead of flooding the UI
+            let _ = app.emit("transfer:bulk-update", ());
+        } else {
+            for id in &cancelled_ids {
+                let _ = app.emit(
+                    "transfer:status",
+                    StatusEvent {
+                        task_id: id.clone(),
+                        status: TransferStatus::Cancelled,
+                    },
+                );
+            }
         }
         if delete_local {
             if let Some(root) = root {

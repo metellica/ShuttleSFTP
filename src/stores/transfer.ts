@@ -6,8 +6,9 @@ import type { TransferTask } from '@/types/transfer'
 export const useTransferStore = defineStore('transfer', () => {
   const tasks = ref<TransferTask[]>([])
 
+  /** Add a task if unknown (e.g. from a backend `transfer:queued` event). */
   function addTask(task: TransferTask) {
-    tasks.value.push(task)
+    if (!tasks.value.some((t) => t.id === task.id)) tasks.value.push(task)
   }
 
   function updateTask(taskId: string, updates: Partial<TransferTask>) {

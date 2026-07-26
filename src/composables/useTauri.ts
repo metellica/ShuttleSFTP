@@ -70,11 +70,17 @@ export const pauseTransfer = (taskId: string) =>
 export const pauseAllTransfers = () =>
   invoke<string[]>('pause_all_transfers')
 
+export const pauseTransferGroup = (groupId: string) =>
+  invoke<string[]>('pause_transfer_group', { groupId })
+
 export const resumeTransfer = (taskId: string, sessionId?: string) =>
   invoke<void>('resume_transfer', { taskId, sessionId: sessionId ?? null })
 
 export const resumeAllTransfers = () =>
   invoke<string[]>('resume_all_transfers')
+
+export const resumeTransferGroup = (groupId: string, sessionId?: string) =>
+  invoke<string[]>('resume_transfer_group', { groupId, sessionId: sessionId ?? null })
 
 export const clearFinishedTransfers = () =>
   invoke<void>('clear_finished_transfers')

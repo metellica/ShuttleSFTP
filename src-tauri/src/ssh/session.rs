@@ -137,7 +137,8 @@ impl SessionManager {
     }
 
     /// Find any live session connected to the given host as the given
-    /// user. Used to rebind persisted transfers after a restart.
+    /// user. An empty username matches any user on that host. Used to
+    /// rebind persisted transfers after a restart.
     pub async fn find_session_for(
         &self,
         host: &str,
@@ -146,7 +147,7 @@ impl SessionManager {
         let sessions = self.sessions.lock().await;
         for (id, session) in sessions.iter() {
             let params = { session.lock().await.params.clone() };
-            if params.host == host && params.username == username {
+            if params.host == host && (username.is_empty() || params.username == username) {
                 return Some((id.clone(), session.clone()));
             }
         }

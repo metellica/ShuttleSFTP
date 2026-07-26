@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tauri::State;
+use tauri::{Emitter, State};
 use tokio::sync::Mutex;
 
 use crate::error::{AppError, AppResult};
@@ -440,6 +440,54 @@ pub async fn pause_all_transfers(
     transfer_engine.pause_all(&app).await
 }
 
+/// Pause every queued/active task of a directory transfer group.
+#[tauri::command]
+pub async fn pause_transfer_group(
+    group_id: String,
+    app: tauri::AppHandle,
+    transfer_engine: State<'_, TransferEngine>,
+) -> AppResult<Vec<String>> {
+    transfer_engine.pause_group(&app, &group_id).await
+}
+
+/// Resume every paused/failed task of a directory transfer group that can
+/// be bound to a live session. Returns the ids of the resumed transfers.
+#[tauri::command]
+pub async fn resume_transfer_group(
+    group_id: String,
+    session_id: Option<String>,
+    app: tauri::AppHandle,
+    session_manager: State<'_, SessionManager>,
+    transfer_engine: State<'_, TransferEngine>,
+) -> AppResult<Vec<String>> {
+    let mut resumed = Vec::new();
+    for task in transfer_engine.list_tasks().await {
+        if task.group_id.as_deref() != Some(group_id.as_str()) {
+            continue;
+        }
+        if !matches!(task.status, TransferStatus::Paused | TransferStatus::Failed) {
+            continue;
+        }
+        let Ok((src, dst)) =
+            endpoints_for_task(session_manager.inner(), &task, session_id.clone()).await
+        else {
+            continue;
+        };
+        if transfer_engine
+            .resume(app.clone(), &task.id, src, dst, true)
+            .await
+            .is_ok()
+        {
+            resumed.push(task.id);
+        }
+    }
+    // One event for the whole batch instead of one per resumed task
+    if !resumed.is_empty() {
+        let _ = app.emit("transfer:bulk-update", ());
+    }
+    Ok(resumed)
+}
+
 /// Find a live session to run this task on: prefer its original session,
 /// otherwise any session connected to the same host as the same user.
 async fn resolve_session_for_task(
@@ -488,23 +536,42 @@ async fn endpoints_for_task(
             Ok((endpoint(&sid, session), Endpoint::Local))
         }
         TransferDirection::Remote => {
-            // Both sessions must still be alive: container/pod endpoints
-            // cannot be rebound by host name.
-            let src = session_manager.get_session(&task.session_id).await.map_err(|_| {
-                AppError::SessionNotFound(
-                    "Source session of this copy is closed; reconnect and start it again".into(),
-                )
-            })?;
-            let dst_id = task.dest_session_id.clone().ok_or_else(|| {
-                AppError::TransferError("Copy task has no destination session".into())
-            })?;
-            let dst = session_manager.get_session(&dst_id).await.map_err(|_| {
-                AppError::SessionNotFound(
-                    "Destination session of this copy is closed; reconnect and start it again"
-                        .into(),
-                )
-            })?;
-            Ok((endpoint(&task.session_id, src), endpoint(&dst_id, dst)))
+            // Rebind each side: prefer the original session, else any live
+            // session on the same host (virtual container/pod paths are
+            // served by the host session).
+            let (src_id, src) = match session_manager.get_session(&task.session_id).await {
+                Ok(s) => (task.session_id.clone(), s),
+                Err(_) => session_manager
+                    .find_session_for(&task.host, &task.username)
+                    .await
+                    .ok_or_else(|| {
+                        AppError::SessionNotFound(format!(
+                            "No active session for {}@{}; connect first, then resume",
+                            task.username, task.host
+                        ))
+                    })?,
+            };
+            let dst_live = match &task.dest_session_id {
+                Some(id) => session_manager
+                    .get_session(id)
+                    .await
+                    .ok()
+                    .map(|s| (id.clone(), s)),
+                None => None,
+            };
+            let (dst_id, dst) = match dst_live {
+                Some(pair) => pair,
+                None => session_manager
+                    .find_session_for(&task.dest_host, &task.dest_username)
+                    .await
+                    .ok_or_else(|| {
+                        AppError::SessionNotFound(format!(
+                            "No active session for destination {}; connect first, then resume",
+                            task.dest_host
+                        ))
+                    })?,
+            };
+            Ok((endpoint(&src_id, src), endpoint(&dst_id, dst)))
         }
     }
 }
@@ -524,7 +591,7 @@ pub async fn resume_transfer(
         .await
         .ok_or_else(|| AppError::TransferError(format!("Task not found: {}", task_id)))?;
     let (src, dst) = endpoints_for_task(session_manager.inner(), &task, session_id).await?;
-    transfer_engine.resume(app, &task_id, src, dst).await
+    transfer_engine.resume(app, &task_id, src, dst, false).await
 }
 
 /// Resume all paused transfers that can be bound to a live session.
@@ -545,12 +612,16 @@ pub async fn resume_all_transfers(
             continue;
         };
         if transfer_engine
-            .resume(app.clone(), &task.id, src, dst)
+            .resume(app.clone(), &task.id, src, dst, true)
             .await
             .is_ok()
         {
             resumed.push(task.id);
         }
+    }
+    // One event for the whole batch instead of one per resumed task
+    if !resumed.is_empty() {
+        let _ = app.emit("transfer:bulk-update", ());
     }
     Ok(resumed)
 }

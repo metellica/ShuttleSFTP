@@ -40,6 +40,10 @@ pub struct TransferTask {
     /// Destination host label ("local" for downloads).
     #[serde(default)]
     pub dest_host: String,
+    /// Destination username, for rebinding remote-remote copies. May be
+    /// empty on tasks persisted by older versions.
+    #[serde(default)]
+    pub dest_username: String,
     /// Set when this task is part of a directory transfer (tree display).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_id: Option<String>,
