@@ -25,6 +25,42 @@ const showBookmarksDialog = ref(false)
 const remotePanelRef = ref<InstanceType<typeof RemotePanel> | null>(null)
 const unlisteners: UnlistenFn[] = []
 
+// Coalesce high-frequency backend events: progress updates are batched
+// and applied at most every 100ms; bulk re-syncs are debounced. Keeps
+// a huge queue from re-rendering per event.
+const pendingProgress = new Map<string, TransferProgress>()
+let progressTimer: ReturnType<typeof setTimeout> | null = null
+function queueProgress(p: TransferProgress) {
+  pendingProgress.set(p.taskId, p)
+  progressTimer ??= setTimeout(() => {
+    progressTimer = null
+    for (const [taskId, prog] of pendingProgress) {
+      transferStore.updateTask(taskId, {
+        transferredBytes: prog.transferredBytes,
+        totalBytes: prog.totalBytes,
+        speed: prog.speed,
+      })
+    }
+    pendingProgress.clear()
+  }, 100)
+}
+
+let syncTimer: ReturnType<typeof setTimeout> | null = null
+function queueSync() {
+  syncTimer ??= setTimeout(() => {
+    syncTimer = null
+    transferStore.syncTasks().catch((e) => console.error('Cannot sync transfers:', e))
+  }, 100)
+}
+
+let refreshTimer: ReturnType<typeof setTimeout> | null = null
+function queueRefresh() {
+  refreshTimer ??= setTimeout(() => {
+    refreshTimer = null
+    remotePanelRef.value?.refresh()
+  }, 500)
+}
+
 function preventDefaultContextMenu(e: MouseEvent) {
   e.preventDefault()
 }
@@ -60,7 +96,7 @@ onMounted(async () => {
     // Bulk operations (cancel/pause/resume all) send one event instead of
     // thousands of per-task events: re-sync the whole list once.
     await listen('transfer:bulk-update', () => {
-      transferStore.syncTasks().catch((e) => console.error('Cannot sync transfers:', e))
+      queueSync()
     })
   )
   unlisteners.push(
@@ -72,11 +108,7 @@ onMounted(async () => {
   )
   unlisteners.push(
     await listen<TransferProgress>('transfer:progress', (e) => {
-      transferStore.updateTask(e.payload.taskId, {
-        transferredBytes: e.payload.transferredBytes,
-        totalBytes: e.payload.totalBytes,
-        speed: e.payload.speed,
-      })
+      queueProgress(e.payload)
     })
   )
   unlisteners.push(
@@ -85,10 +117,12 @@ onMounted(async () => {
       (e) => {
         transferStore.updateTask(e.payload.taskId, { status: e.payload.status })
         if (e.payload.status === 'completed') {
-          const task = transferStore.tasks.find((t) => t.id === e.payload.taskId)
-          // Refresh unless we know it was a download (remote dir unchanged)
+          const task = transferStore.getTask(e.payload.taskId)
+          // Refresh unless we know it was a download (remote dir unchanged).
+          // Debounced: a large directory upload completes thousands of
+          // tasks, each of which would otherwise trigger a listing.
           if (!task || task.direction === 'upload' || task.direction === 'remote') {
-            remotePanelRef.value?.refresh()
+            queueRefresh()
           }
         }
       }

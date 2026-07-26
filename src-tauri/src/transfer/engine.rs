@@ -105,18 +105,22 @@ fn load_persisted_tasks() -> HashMap<String, TransferTask> {
         .collect()
 }
 
+/// Serialize and write the whole task list off the async runtime.
+/// Compact JSON: a large queue would take tens of MB pretty-printed.
 async fn persist_tasks(tasks: &TaskMap) {
     let list: Vec<TransferTask> = {
         let map = tasks.lock().await;
         map.values().cloned().collect()
     };
-    match serde_json::to_string_pretty(&list) {
-        Ok(json) => {
-            if let Err(e) = std::fs::write(transfers_path(), json) {
-                log::warn!("Cannot persist transfers: {}", e);
-            }
-        }
-        Err(e) => log::warn!("Cannot serialize transfers: {}", e),
+    let write = tokio::task::spawn_blocking(move || {
+        let json = serde_json::to_string(&list).map_err(|e| e.to_string())?;
+        std::fs::write(transfers_path(), json).map_err(|e| e.to_string())
+    })
+    .await;
+    match write {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => log::warn!("Cannot persist transfers: {}", e),
+        Err(e) => log::warn!("Persist task panicked: {}", e),
     }
 }
 
@@ -127,17 +131,21 @@ fn now_millis() -> u64 {
         .unwrap_or(0)
 }
 
-/// Persist soon, coalescing bursts: queueing a large directory would
-/// otherwise rewrite the whole task file once per queued file.
-fn schedule_persist(tasks: &TaskMap, pending: &Arc<AtomicBool>) {
-    if pending.swap(true, Ordering::SeqCst) {
+/// Set while a debounced persist of the task list is scheduled. Global:
+/// per-task status flips during a large transfer must coalesce, or the
+/// full-queue rewrite runs once per completed file.
+static PERSIST_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// Persist soon, coalescing bursts (queueing, per-file completions,
+/// bulk cancels): at most one full rewrite per 500ms.
+fn schedule_persist(tasks: &TaskMap) {
+    if PERSIST_PENDING.swap(true, Ordering::SeqCst) {
         return; // a persist is already scheduled
     }
     let tasks = tasks.clone();
-    let pending = pending.clone();
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        pending.store(false, Ordering::SeqCst);
+        PERSIST_PENDING.store(false, Ordering::SeqCst);
         persist_tasks(&tasks).await;
     });
 }
@@ -151,8 +159,6 @@ pub struct TransferEngine {
     running: RunningSet,
     /// group_id -> local root dir to delete once no group member is running.
     pending_group_deletes: PendingDeletes,
-    /// Set while a debounced persist of the task list is scheduled.
-    persist_pending: Arc<AtomicBool>,
 }
 
 impl TransferEngine {
@@ -162,7 +168,6 @@ impl TransferEngine {
             semaphore: Arc::new(Semaphore::new(max_concurrent)),
             running: Arc::new(Mutex::new(HashSet::new())),
             pending_group_deletes: Arc::new(Mutex::new(HashMap::new())),
-            persist_pending: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -217,7 +222,7 @@ impl TransferEngine {
             status: TransferStatus::Queued,
         };
         self.tasks.lock().await.insert(task_id.clone(), task.clone());
-        schedule_persist(&self.tasks, &self.persist_pending);
+        schedule_persist(&self.tasks);
         // Tell the frontend right away so the queue UI shows the task even
         // while a long multi-file queueing call is still in progress.
         let _ = app.emit("transfer:queued", &task);
@@ -288,7 +293,7 @@ impl TransferEngine {
                 map.insert(task.id.clone(), task.clone());
             }
         }
-        schedule_persist(&self.tasks, &self.persist_pending);
+        schedule_persist(&self.tasks);
         if few {
             for task in &tasks_out {
                 let _ = app.emit("transfer:queued", task);
@@ -356,7 +361,7 @@ impl TransferEngine {
                             },
                         );
                         cleanup_cancelled(&tasks, &task_id).await;
-                        persist_tasks(&tasks).await;
+                        schedule_persist(&tasks);
                         log::info!("Transfer {} cancelled", task_id);
                     } else {
                         // Re-emit now that the byte position is final, and
@@ -368,7 +373,7 @@ impl TransferEngine {
                                 status: TransferStatus::Paused,
                             },
                         );
-                        persist_tasks(&tasks).await;
+                        schedule_persist(&tasks);
                         log::info!("Transfer {} paused", task_id);
                     }
                 }
@@ -381,7 +386,7 @@ impl TransferEngine {
                         },
                     );
                     cleanup_cancelled(&tasks, &task_id).await;
-                    persist_tasks(&tasks).await;
+                    schedule_persist(&tasks);
                     log::info!("Transfer {} cancelled", task_id);
                 }
                 Err(e) => {
@@ -401,7 +406,7 @@ impl TransferEngine {
                             },
                         );
                         cleanup_cancelled(&tasks, &task_id).await;
-                        persist_tasks(&tasks).await;
+                        schedule_persist(&tasks);
                         log::info!("Transfer {} cancelled", task_id);
                     } else {
                         set_status(&tasks, &app, &task_id, TransferStatus::Failed).await;
@@ -436,7 +441,7 @@ impl TransferEngine {
                     status: TransferStatus::Paused,
                 },
             );
-            persist_tasks(&self.tasks).await;
+            schedule_persist(&self.tasks);
         }
         Ok(())
     }
@@ -469,7 +474,7 @@ impl TransferEngine {
             }
         }
         if !paused.is_empty() {
-            persist_tasks(&self.tasks).await;
+            schedule_persist(&self.tasks);
         }
         Ok(paused)
     }
@@ -509,7 +514,7 @@ impl TransferEngine {
             }
         }
         if !paused.is_empty() {
-            persist_tasks(&self.tasks).await;
+            schedule_persist(&self.tasks);
         }
         Ok(paused)
     }
@@ -555,7 +560,7 @@ impl TransferEngine {
         }
         // Debounced: resume-all over a large backlog would otherwise
         // rewrite the whole task file once per task.
-        schedule_persist(&self.tasks, &self.persist_pending);
+        schedule_persist(&self.tasks);
         self.spawn_transfer(app, src, dst, task_id.to_string());
         Ok(())
     }
@@ -598,7 +603,7 @@ impl TransferEngine {
             if !was_active {
                 cleanup_cancelled(&self.tasks, task_id).await;
             }
-            persist_tasks(&self.tasks).await;
+            schedule_persist(&self.tasks);
         }
         Ok(())
     }
@@ -673,7 +678,7 @@ impl TransferEngine {
             }
         }
         if !cancelled.is_empty() {
-            persist_tasks(&self.tasks).await;
+            schedule_persist(&self.tasks);
         }
         Ok(())
     }
@@ -738,7 +743,7 @@ impl TransferEngine {
             }
         }
         if !cancelled_ids.is_empty() {
-            persist_tasks(&self.tasks).await;
+            schedule_persist(&self.tasks);
         }
         Ok(())
     }
@@ -760,7 +765,7 @@ impl TransferEngine {
                 )
             });
         }
-        persist_tasks(&self.tasks).await;
+        schedule_persist(&self.tasks);
         Ok(())
     }
 
@@ -853,7 +858,7 @@ async fn set_status(
             status,
         },
     );
-    persist_tasks(tasks).await;
+    schedule_persist(tasks);
 }
 
 /// Check whether the running transfer should stop (paused or cancelled).
@@ -999,12 +1004,30 @@ async fn run_copy(
             record_progress(tasks, app, task_id, 0, total, started, 0).await;
             log::info!("Transfer {} using server-side copy: {}", task_id, script);
             let argv = vec!["sh".to_string(), "-c".into(), script];
-            let out = runner.run(&argv, None).await?;
-            if !out.success() {
+            // Spawn instead of run-to-completion so pause/cancel can
+            // interrupt: dropping the stream closes the channel and
+            // kills the remote pipeline.
+            let mut stream = runner.spawn(&argv).await?;
+            let done = loop {
+                tokio::select! {
+                    done = &mut stream.done => {
+                        break done.map_err(|_| {
+                            AppError::TransferError("Server-side copy aborted".into())
+                        })?;
+                    }
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(300)) => {
+                        if let Some(outcome) = check_control(tasks, task_id).await {
+                            drop(stream);
+                            return Ok(outcome);
+                        }
+                    }
+                }
+            };
+            if done.exit.unwrap_or(0) != 0 {
                 return Err(AppError::TransferError(format!(
                     "Server-side copy failed (exit {}): {}",
-                    out.exit.unwrap_or(0),
-                    out.stderr.trim()
+                    done.exit.unwrap_or(0),
+                    done.stderr.trim()
                 )));
             }
             // Verify the destination size matches the source.
