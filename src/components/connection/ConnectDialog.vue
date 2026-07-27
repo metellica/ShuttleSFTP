@@ -386,90 +386,96 @@ async function doConnect() {
         </button>
       </div>
 
+      <div class="dialog-body">
       <div v-if="mode === 'ssh'" class="form">
-        <div class="field combo">
-          <div class="label-row">
-            <label>Host</label>
-            <button
-              v-if="sshHosts.length"
-              type="button"
-              class="import-link"
-              :title="`Choose which ~/.ssh/config hosts appear in this list (${importedNames.size} of ${sshHosts.length} imported)`"
-              @click="openImport"
-            >
-              📋 Import SSH config hosts ({{ importedNames.size }}/{{ sshHosts.length }})
-            </button>
-          </div>
-          <input
-            v-model="host"
-            placeholder="hostname or IP — type to search saved & SSH config hosts"
-            autocomplete="off"
-            @focus="openDropdown"
-            @input="onHostInput"
-            @blur="showDropdown = false"
-            @keydown.down.prevent="moveHighlight(1)"
-            @keydown.up.prevent="moveHighlight(-1)"
-            @keydown.enter.prevent="chooseHighlighted"
-            @keydown.esc="showDropdown = false"
-          />
-          <div v-if="showDropdown && filteredOptions.length" class="combo-list">
-            <div
-              v-for="(opt, i) in filteredOptions"
-              :key="opt.kind + ':' + opt.name"
-              class="combo-item"
-              :class="{ highlighted: i === highlightIndex }"
-              @mousedown.prevent="selectOption(opt)"
-              @mousemove="highlightIndex = i"
-            >
-              <span class="combo-kind">{{ opt.kind === 'profile' ? '⭐' : '📋' }}</span>
-              <span class="combo-name">{{ opt.name }}</span>
-              <span class="combo-host">{{ opt.hostname }}</span>
+        <div class="row">
+          <div class="field combo">
+            <div class="label-row">
+              <label>Host</label>
               <button
-                class="combo-clone"
-                title="Clone this connection"
-                @mousedown.prevent.stop="cloneOption(opt)"
+                v-if="sshHosts.length"
+                type="button"
+                class="import-link"
+                :title="`Choose which ~/.ssh/config hosts appear in this list (${importedNames.size} of ${sshHosts.length} imported)`"
+                @click="openImport"
               >
-                ⧉
+                📋 Import ({{ importedNames.size }}/{{ sshHosts.length }})
               </button>
             </div>
+            <input
+              v-model="host"
+              placeholder="hostname or IP — type to search"
+              autocomplete="off"
+              @focus="openDropdown"
+              @input="onHostInput"
+              @blur="showDropdown = false"
+              @keydown.down.prevent="moveHighlight(1)"
+              @keydown.up.prevent="moveHighlight(-1)"
+              @keydown.enter.prevent="chooseHighlighted"
+              @keydown.esc="showDropdown = false"
+            />
+            <div v-if="showDropdown && filteredOptions.length" class="combo-list">
+              <div
+                v-for="(opt, i) in filteredOptions"
+                :key="opt.kind + ':' + opt.name"
+                class="combo-item"
+                :class="{ highlighted: i === highlightIndex }"
+                @mousedown.prevent="selectOption(opt)"
+                @mousemove="highlightIndex = i"
+              >
+                <span class="combo-kind">{{ opt.kind === 'profile' ? '⭐' : '📋' }}</span>
+                <span class="combo-name">{{ opt.name }}</span>
+                <span class="combo-host">{{ opt.hostname }}</span>
+                <button
+                  class="combo-clone"
+                  title="Clone this connection"
+                  @mousedown.prevent.stop="cloneOption(opt)"
+                >
+                  ⧉
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="field port">
+            <label>Port</label>
+            <input v-model.number="port" type="number" />
           </div>
         </div>
-        <div class="field half">
-          <label>Port</label>
-          <input v-model.number="port" type="number" />
-        </div>
-        <div class="field">
-          <label>Username</label>
-          <input v-model="username" placeholder="root" />
-        </div>
 
-        <div class="field">
-          <label>Auth Method</label>
-          <select v-model="authType">
-            <option value="password">Password</option>
-            <option value="key">Private Key</option>
-          </select>
-        </div>
-
-        <div v-if="authType === 'password'" class="field">
-          <label>Password</label>
-          <input v-model="password" type="password" />
-        </div>
-
-        <template v-if="authType === 'key'">
+        <div class="row">
           <div class="field">
+            <label>Username</label>
+            <input v-model="username" placeholder="root" />
+          </div>
+          <div class="field">
+            <label>Alias (shown on tab)</label>
+            <input v-model="aliasName" placeholder="e.g. prod-server" autocomplete="off" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label>Auth Method</label>
+            <select v-model="authType">
+              <option value="password">Password</option>
+              <option value="key">Private Key</option>
+            </select>
+          </div>
+          <div v-if="authType === 'password'" class="field">
+            <label>Password</label>
+            <input v-model="password" type="password" />
+          </div>
+          <div v-else class="field">
             <label>Key Path</label>
             <input v-model="keyPath" placeholder="~/.ssh/id_ed25519" />
           </div>
+        </div>
+
+        <div v-if="authType === 'key'" class="row">
           <div class="field">
             <label>Passphrase (optional)</label>
             <input v-model="passphrase" type="password" />
           </div>
-        </template>
-
-        <div class="field">
-          <label>Alias Name (shown on tab)</label>
-          <input v-model="aliasName" placeholder="e.g. prod-server" autocomplete="off" />
         </div>
 
         <div class="checks">
@@ -503,6 +509,7 @@ async function doConnect() {
 
       <div v-if="error" class="error">{{ error }}</div>
       <div v-if="saveMsg" class="saved">{{ saveMsg }}</div>
+      </div>
 
       <div class="actions">
         <button class="btn cancel" @click="emit('close')">Cancel</button>
@@ -573,10 +580,21 @@ async function doConnect() {
   background: #1e1e2e;
   border: 1px solid #45475a;
   border-radius: 8px;
-  padding: 24px;
-  width: 440px;
-  max-height: 80vh;
+  padding: 20px 24px;
+  width: 480px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Scrollable middle section: header and action buttons stay visible. */
+.dialog-body {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  margin: 0 -4px;
+  padding: 0 4px;
 }
 
 h2 {
@@ -785,8 +803,9 @@ h2 {
 
 .checks {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 18px;
   margin-top: 2px;
 }
 
@@ -850,7 +869,21 @@ h2 {
 .form {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+}
+
+.row .field {
+  flex: 1;
+  min-width: 0;
+}
+
+.row .field.port {
+  flex: 0 0 80px;
 }
 
 .field {
@@ -881,10 +914,10 @@ h2 {
 }
 
 .hint {
-  margin-top: 10px;
+  margin-top: 8px;
   font-size: 11px;
   color: #6c7086;
-  line-height: 1.6;
+  line-height: 1.5;
 }
 
 .hint code {
@@ -908,7 +941,8 @@ h2 {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 20px;
+  margin-top: 14px;
+  flex-shrink: 0;
 }
 
 .btn {
