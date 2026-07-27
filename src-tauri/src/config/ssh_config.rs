@@ -28,6 +28,30 @@ pub fn load_ssh_config() -> AppResult<Vec<SshHostEntry>> {
     Ok(parse_ssh_config(&content))
 }
 
+fn imported_hosts_path() -> PathBuf {
+    super::app_config_dir().join("imported_ssh_hosts.json")
+}
+
+/// Host aliases the user chose to import from ~/.ssh/config. Only these
+/// are offered in the connection UI; nothing is imported by default.
+pub fn load_imported_hosts() -> AppResult<Vec<String>> {
+    let path = imported_hosts_path();
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| AppError::ConfigError(format!("Cannot read imported hosts: {}", e)))?;
+    serde_json::from_str(&content)
+        .map_err(|e| AppError::ConfigError(format!("Invalid imported hosts JSON: {}", e)))
+}
+
+pub fn save_imported_hosts(names: &[String]) -> AppResult<()> {
+    let content = serde_json::to_string_pretty(names)
+        .map_err(|e| AppError::ConfigError(format!("Serialize error: {}", e)))?;
+    std::fs::write(imported_hosts_path(), content)
+        .map_err(|e| AppError::ConfigError(format!("Cannot write imported hosts: {}", e)))
+}
+
 fn get_ssh_config_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("~"))

@@ -2,6 +2,8 @@
 import { ref, computed, onMounted } from 'vue'
 import {
   loadSshConfig,
+  listImportedSshHosts,
+  setImportedSshHosts,
   sshConnect,
   connectLocal,
   listProfiles,
@@ -32,6 +34,8 @@ interface HostOption {
 }
 
 const sshHosts = ref<SshHostEntry[]>([])
+/** Aliases the user imported from ~/.ssh/config; only these are listed. */
+const importedNames = ref<Set<string>>(new Set())
 const profiles = ref<ConnectionProfile[]>([])
 const host = ref('')
 const port = ref(22)
@@ -59,6 +63,11 @@ onMounted(async () => {
     // SSH config may not exist
   }
   try {
+    importedNames.value = new Set(await listImportedSshHosts())
+  } catch (e) {
+    // Imported list may not exist yet
+  }
+  try {
     profiles.value = await listProfiles()
   } catch (e) {
     // Profiles file may not exist
@@ -72,12 +81,15 @@ const allOptions = computed<HostOption[]>(() => {
     hostname: p.host,
     profile: p,
   }))
-  const sshOpts: HostOption[] = sshHosts.value.map((e) => ({
-    kind: 'ssh',
-    name: e.name,
-    hostname: e.hostname || '',
-    sshEntry: e,
-  }))
+  // Only user-imported SSH config hosts: the raw list can be huge.
+  const sshOpts: HostOption[] = sshHosts.value
+    .filter((e) => importedNames.value.has(e.name))
+    .map((e) => ({
+      kind: 'ssh',
+      name: e.name,
+      hostname: e.hostname || '',
+      sshEntry: e,
+    }))
   return [...profileOpts, ...sshOpts]
 })
 
@@ -113,6 +125,55 @@ const filteredOptions = computed(() => {
 function openDropdown() {
   showDropdown.value = true
   highlightIndex.value = 0
+}
+
+// --- SSH config import picker ---
+const showImport = ref(false)
+const importFilter = ref('')
+const importChecked = ref<Set<string>>(new Set())
+
+function openImport() {
+  importFilter.value = ''
+  importChecked.value = new Set(importedNames.value)
+  showImport.value = true
+}
+
+const importList = computed(() => {
+  const q = importFilter.value.trim().toLowerCase()
+  if (!q) return sshHosts.value
+  return sshHosts.value.filter(
+    (e) => e.name.toLowerCase().includes(q) || (e.hostname ?? '').toLowerCase().includes(q)
+  )
+})
+
+function toggleImport(name: string) {
+  const s = new Set(importChecked.value)
+  if (s.has(name)) s.delete(name)
+  else s.add(name)
+  importChecked.value = s
+}
+
+/** Check/uncheck every host currently visible through the filter. */
+function importSelectAll(select: boolean) {
+  const s = new Set(importChecked.value)
+  for (const e of importList.value) {
+    if (select) s.add(e.name)
+    else s.delete(e.name)
+  }
+  importChecked.value = s
+}
+
+async function saveImport() {
+  try {
+    const names = sshHosts.value
+      .map((e) => e.name)
+      .filter((n) => importChecked.value.has(n))
+    await setImportedSshHosts(names)
+    importedNames.value = new Set(names)
+    showImport.value = false
+  } catch (e: any) {
+    error.value = e?.toString() || 'Failed to save imported hosts'
+  }
 }
 
 function onHostInput() {
@@ -327,7 +388,18 @@ async function doConnect() {
 
       <div v-if="mode === 'ssh'" class="form">
         <div class="field combo">
-          <label>Host</label>
+          <div class="label-row">
+            <label>Host</label>
+            <button
+              v-if="sshHosts.length"
+              type="button"
+              class="import-link"
+              :title="`Choose which ~/.ssh/config hosts appear in this list (${importedNames.size} of ${sshHosts.length} imported)`"
+              @click="openImport"
+            >
+              📋 Import SSH config hosts ({{ importedNames.size }}/{{ sshHosts.length }})
+            </button>
+          </div>
           <input
             v-model="host"
             placeholder="hostname or IP — type to search saved & SSH config hosts"
@@ -447,6 +519,42 @@ async function doConnect() {
         </button>
       </div>
     </div>
+
+    <!-- SSH config host import picker -->
+    <div v-if="showImport" class="import-overlay" @click.self="showImport = false">
+      <div class="import-panel">
+        <h3>Import from ~/.ssh/config</h3>
+        <input
+          v-model="importFilter"
+          class="import-filter"
+          placeholder="Filter hosts…"
+          autocomplete="off"
+        />
+        <div class="import-hdr">
+          <span>{{ importChecked.size }} selected</span>
+          <span>
+            <button class="mini" @click="importSelectAll(true)">Select all</button>
+            <button class="mini" @click="importSelectAll(false)">Clear</button>
+          </span>
+        </div>
+        <div class="import-list">
+          <label v-for="e in importList" :key="e.name" class="import-item">
+            <input
+              type="checkbox"
+              :checked="importChecked.has(e.name)"
+              @change="toggleImport(e.name)"
+            />
+            <span class="combo-name">{{ e.name }}</span>
+            <span class="combo-host">{{ e.hostname }}</span>
+          </label>
+          <div v-if="importList.length === 0" class="import-empty">No matching hosts</div>
+        </div>
+        <div class="import-actions">
+          <button class="btn cancel" @click="showImport = false">Cancel</button>
+          <button class="btn primary" @click="saveImport">Import</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -506,6 +614,131 @@ h2 {
 
 .combo {
   position: relative;
+}
+
+.label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.import-link {
+  background: none;
+  border: none;
+  color: #89b4fa;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.import-link:hover {
+  text-decoration: underline;
+}
+
+.import-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 110;
+}
+
+.import-panel {
+  background: #1e1e2e;
+  border: 1px solid #45475a;
+  border-radius: 8px;
+  padding: 20px;
+  width: 420px;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.import-panel h3 {
+  font-size: 14px;
+  color: #cdd6f4;
+  margin-bottom: 10px;
+}
+
+.import-filter {
+  padding: 6px 10px;
+  background: #313244;
+  border: 1px solid #45475a;
+  border-radius: 4px;
+  color: #cdd6f4;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.import-filter:focus {
+  border-color: #89b4fa;
+  outline: none;
+}
+
+.import-hdr {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: #a6adc8;
+  margin-bottom: 6px;
+}
+
+.mini {
+  background: #313244;
+  border: 1px solid #45475a;
+  color: #cdd6f4;
+  border-radius: 4px;
+  font-size: 11px;
+  padding: 1px 8px;
+  cursor: pointer;
+  margin-left: 6px;
+}
+
+.mini:hover {
+  background: #45475a;
+}
+
+.import-list {
+  flex: 1;
+  min-height: 120px;
+  overflow-y: auto;
+  border: 1px solid #313244;
+  border-radius: 6px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.import-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.import-item:hover {
+  background: #313244;
+}
+
+.import-empty {
+  color: #6c7086;
+  text-align: center;
+  padding: 16px 0;
+  font-size: 12px;
+}
+
+.import-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
 }
 
 .combo-list {

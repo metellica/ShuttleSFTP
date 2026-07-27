@@ -29,7 +29,7 @@ A fast, lightweight, cross-platform SFTP/SCP GUI built with **Tauri 2 + Vue 3 + 
 - 🧹 **Safe Cancel** — Cancelling a download asks whether to delete the partial local file (or the whole folder for directory downloads)
 - ⭐ **Bookmarks** — Right-click any remote folder to bookmark it (with custom alias), then one-click reconnect straight into that path
 - 🔑 **Flexible Auth** — Password, private key (with passphrase), SSH agent
-- 📋 **SSH Config** — Auto-loads `~/.ssh/config` hosts with fuzzy-search dropdown
+- 📋 **SSH Config Import** — Pick which `~/.ssh/config` hosts to import (checkbox picker with filter); only imported hosts appear in the fuzzy-search dropdown
 - 💾 **Saved Profiles** — Save connections (optionally with credentials) for quick reuse, with or without connecting; aliases are globally unique across profiles and SSH config hosts
 - ⧉ **Clone Connections** — One-click ⧉ in the host dropdown duplicates any saved profile or SSH config host as a new editable connection ("name copy")
 - 🗂️ **Multi-Tab** — Multiple concurrent SFTP sessions in tabs (labeled by SSH alias)
@@ -115,7 +115,7 @@ ShuttleSFTP/
 
 1. Launch the app
 2. Click **+** or **Connect** to open a new session — choose **⌁ SSH Host** or **💻 This Machine** (local files + local container engines)
-3. Type in the Host field to fuzzy-search your SSH config hosts, or enter connection details manually. Click **⧉** next to any dropdown entry to clone it as a new connection — tweak host/user/auth, then **Save** (no connection needed) or **Connect**. Duplicate alias names are rejected
+3. Type in the Host field to fuzzy-search your saved and imported hosts, or enter connection details manually. Use **📋 Import SSH config hosts** above the field to choose which `~/.ssh/config` hosts appear in the dropdown (none are shown until imported). Click **⧉** next to any dropdown entry to clone it as a new connection — tweak host/user/auth, then **Save** (no connection needed) or **Connect**. Duplicate alias names are rejected
 4. Browse remote files in Finder-style columns — click a directory to expand it in the next column, click any breadcrumb segment to jump back
 5. **Containers & pods**: at the root of every session, open **▣ `@containers`** to browse the host's running containers (name, runtime and image shown), or **⎈ `@pods`** to walk `namespace → pod → container`. Files inside behave like any other directory — preview, edit, upload, download, delete
 6. **Path bar**: click the empty area (or ✏️) to type a path directly — Enter navigates, Esc cancels. Use 📋 to copy the current path, or right-click the bar for **Copy Path / Paste & Go / Edit Path**
@@ -141,6 +141,7 @@ All settings are stored as plain JSON under `~/.config/shuttle-sftp/` on every p
 |------|----------|
 | `profiles.json` | Saved connection profiles |
 | `bookmarks.json` | Bookmarked remote paths |
+| `imported_ssh_hosts.json` | `~/.ssh/config` hosts imported into the connect dialog |
 | `transfers.json` | Transfer queue state (enables resume after restart) |
 
 ## CI / Releases
@@ -158,7 +159,7 @@ GitHub Actions builds installers for all platforms and publishes them to a GitHu
 
 - [x] Multi-tab SFTP sessions
 - [x] Password + private key auth
-- [x] SSH config loading with fuzzy search
+- [x] SSH config host import (user-selected hosts, fuzzy search)
 - [x] Drag & drop upload
 - [x] Download / Save As via context menu
 - [x] Finder-style column view with breadcrumb navigation

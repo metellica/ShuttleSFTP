@@ -9,6 +9,16 @@ pub fn load_ssh_config() -> AppResult<Vec<SshHostEntry>> {
 }
 
 #[tauri::command]
+pub fn list_imported_ssh_hosts() -> AppResult<Vec<String>> {
+    ssh_config::load_imported_hosts()
+}
+
+#[tauri::command]
+pub fn set_imported_ssh_hosts(names: Vec<String>) -> AppResult<()> {
+    ssh_config::save_imported_hosts(&names)
+}
+
+#[tauri::command]
 pub fn list_profiles() -> AppResult<Vec<ConnectionProfile>> {
     profiles::load_profiles()
 }

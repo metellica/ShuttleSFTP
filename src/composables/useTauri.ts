@@ -125,6 +125,12 @@ export const listTransfers = () =>
 export const loadSshConfig = () =>
   invoke<SshHostEntry[]>('load_ssh_config')
 
+export const listImportedSshHosts = () =>
+  invoke<string[]>('list_imported_ssh_hosts')
+
+export const setImportedSshHosts = (names: string[]) =>
+  invoke<void>('set_imported_ssh_hosts', { names })
+
 export const listProfiles = () =>
   invoke<ConnectionProfile[]>('list_profiles')
 

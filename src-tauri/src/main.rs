@@ -42,6 +42,8 @@ fn main() {
             shuttle_sftp::commands::transfer::list_transfers,
             shuttle_sftp::commands::prepare::cancel_prepare,
             shuttle_sftp::commands::config::load_ssh_config,
+            shuttle_sftp::commands::config::list_imported_ssh_hosts,
+            shuttle_sftp::commands::config::set_imported_ssh_hosts,
             shuttle_sftp::commands::config::list_profiles,
             shuttle_sftp::commands::config::save_profile,
             shuttle_sftp::commands::config::delete_profile,
