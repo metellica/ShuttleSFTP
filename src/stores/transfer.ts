@@ -34,7 +34,10 @@ export const useTransferStore = defineStore('transfer', () => {
   /** Throttled view of the task list. */
   const tasks = computed(() => {
     void version.value
-    return _tasks.value
+    // Fresh array each bump: since Vue 3.4 a computed that re-evaluates
+    // to an identical value does not notify dependents, so returning the
+    // same (mutated-in-place) array would leave consumers stale.
+    return _tasks.value.slice()
   })
 
   /** Add a task if unknown (e.g. from a backend `transfer:queued` event). */

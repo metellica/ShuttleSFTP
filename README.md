@@ -33,7 +33,7 @@ A fast, lightweight, cross-platform SFTP/SCP GUI built with **Tauri 2 + Vue 3 + 
 - 💾 **Saved Profiles** — Save connections (optionally with credentials) for quick reuse, with or without connecting; aliases are globally unique across profiles and SSH config hosts
 - ⧉ **Clone Connections** — One-click ⧉ in the host dropdown duplicates any saved profile or SSH config host as a new editable connection ("name copy")
 - 🗂️ **Multi-Tab** — Multiple concurrent SFTP sessions in tabs (labeled by SSH alias)
-- 📊 **Transfer Queue** — Live per-transfer and total speed, progress, detail view (from/to/size), and open-in-local-folder
+- 📊 **Transfer Queue** — Live progress with sliding-window speed (network speed shown for local ⇄ remote transfers; server-side copies report live progress without a speed figure), detail view (from/to/size), and open-in-local-folder
 - 📦 **Tiny Binary** — ~10MB app bundle (vs ~150MB for Electron alternatives)
 - 🖥️ **Cross-Platform** — Native on Windows, macOS, and Linux
 

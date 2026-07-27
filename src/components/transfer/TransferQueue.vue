@@ -84,18 +84,62 @@ const rows = computed<Row[]>(() => {
     for (const t of group.tasks) {
       group.transferredBytes += t.transferredBytes
       group.totalBytes += t.totalBytes
-      if (t.status === 'active') group.speed += t.speed ?? 0
       if (t.status === 'completed') group.doneCount++
     }
+    // Rate from aggregate byte deltas: per-task speeds miss small files
+    // that start and finish between two UI updates. Server-side copies
+    // (remote direction) don't use the local network: no speed shown.
+    group.speed =
+      group.direction === 'remote'
+        ? 0
+        : windowedRate(
+            `g:${group.id}`,
+            group.transferredBytes,
+            group.status === 'active' || group.status === 'queued'
+          )
   }
   return out
 })
 
-const totalSpeed = computed(() =>
-  transferStore.tasks
-    .filter((t) => t.status === 'active')
-    .reduce((sum, t) => sum + (t.speed ?? 0), 0)
-)
+/**
+ * Sliding-window rate estimator keyed by row: returns bytes/sec from
+ * the growth of an aggregate byte counter over the last few seconds.
+ */
+const SPEED_WINDOW_MS = 5000
+const rateWindows = new Map<string, Array<[number, number]>>()
+function windowedRate(key: string, bytes: number, running: boolean): number {
+  if (!running) {
+    rateWindows.delete(key)
+    return 0
+  }
+  let samples = rateWindows.get(key)
+  const last = samples?.[samples.length - 1]
+  // Counter went backwards (tasks removed/cleared): restart the window.
+  if (!samples || (last && bytes < last[1])) {
+    samples = []
+    rateWindows.set(key, samples)
+  }
+  const now = performance.now()
+  samples.push([now, bytes])
+  let first = samples[0]
+  while (samples.length > 2 && first && now - first[0] > SPEED_WINDOW_MS) {
+    samples.shift()
+    first = samples[0]
+  }
+  if (!first) return 0
+  const dt = (now - first[0]) / 1000
+  return dt > 0 ? (bytes - first[1]) / dt : 0
+}
+
+const totalSpeed = computed(() => {
+  void transferStore.version
+  // Only local<->remote traffic counts: server-side copies don't move
+  // data through this machine.
+  const tasks = transferStore.tasks.filter((t) => t.direction !== 'remote')
+  const running = tasks.some((t) => t.status === 'active' || t.status === 'queued')
+  const bytes = tasks.reduce((sum, t) => sum + t.transferredBytes, 0)
+  return windowedRate('total', bytes, running)
+})
 
 const hasRunning = computed(() =>
   transferStore.tasks.some((t) => t.status === 'active' || t.status === 'queued')
@@ -430,7 +474,7 @@ async function onShowInFolder(path: string | null) {
             <span class="task-name">{{ taskLabel(row.task) }}</span>
             <span class="task-status" :class="row.task.status">{{ row.task.status }}</span>
             <div class="task-progress" v-if="row.task.status === 'active' || row.task.status === 'paused'">
-              <span v-if="row.task.status === 'active'" class="task-speed">{{ formatSpeed(row.task.speed ?? 0) }}</span>
+              <span v-if="row.task.status === 'active' && row.task.direction !== 'remote'" class="task-speed">{{ formatSpeed(row.task.speed ?? 0) }}</span>
               <div class="progress-bar">
                 <div class="progress-fill" :class="{ paused: row.task.status === 'paused' }" :style="{ width: progressPercent(row.task) + '%' }" />
               </div>
@@ -470,7 +514,7 @@ async function onShowInFolder(path: string | null) {
             <span class="group-count">{{ row.group.doneCount }}/{{ row.group.tasks.length }}</span>
             <span class="task-status" :class="row.group.status">{{ row.group.status }}</span>
             <div class="task-progress" v-if="row.group.status === 'active' || row.group.status === 'paused'">
-              <span v-if="row.group.status === 'active'" class="task-speed">{{ formatSpeed(row.group.speed) }}</span>
+              <span v-if="row.group.status === 'active' && row.group.direction !== 'remote'" class="task-speed">{{ formatSpeed(row.group.speed) }}</span>
               <div class="progress-bar">
                 <div class="progress-fill" :class="{ paused: row.group.status === 'paused' }" :style="{ width: progressPercent(row.group) + '%' }" />
               </div>
@@ -498,7 +542,7 @@ async function onShowInFolder(path: string | null) {
                 <span class="task-name">{{ taskLabel(task) }}</span>
                 <span class="task-status" :class="task.status">{{ task.status }}</span>
                 <div class="task-progress" v-if="task.status === 'active' || task.status === 'paused'">
-                  <span v-if="task.status === 'active'" class="task-speed">{{ formatSpeed(task.speed ?? 0) }}</span>
+                  <span v-if="task.status === 'active' && task.direction !== 'remote'" class="task-speed">{{ formatSpeed(task.speed ?? 0) }}</span>
                   <div class="progress-bar">
                     <div class="progress-fill" :class="{ paused: task.status === 'paused' }" :style="{ width: progressPercent(task) + '%' }" />
                   </div>

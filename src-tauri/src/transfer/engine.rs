@@ -18,6 +18,39 @@ use crate::transfer::progress::{
 
 const CHUNK_SIZE: usize = 64 * 1024;
 const PROGRESS_EMIT_THRESHOLD: u64 = 256 * 1024;
+const SPEED_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Sliding-window transfer rate estimator: reports the rate over the
+/// last few seconds instead of a whole-transfer average, so the shown
+/// speed tracks the current throughput.
+struct SpeedMeter {
+    samples: std::collections::VecDeque<(Instant, u64)>,
+}
+
+impl SpeedMeter {
+    fn new(initial_bytes: u64) -> Self {
+        let mut samples = std::collections::VecDeque::new();
+        samples.push_back((Instant::now(), initial_bytes));
+        Self { samples }
+    }
+
+    /// Record the current absolute byte count; returns bytes/sec over
+    /// the recent window.
+    fn update(&mut self, bytes: u64) -> f64 {
+        let now = Instant::now();
+        self.samples.push_back((now, bytes));
+        while self.samples.len() > 2 && now.duration_since(self.samples[0].0) > SPEED_WINDOW {
+            self.samples.pop_front();
+        }
+        let (t0, b0) = self.samples[0];
+        let dt = now.duration_since(t0).as_secs_f64();
+        if dt > 0.0 {
+            bytes.saturating_sub(b0) as f64 / dt
+        } else {
+            0.0
+        }
+    }
+}
 
 /// One side of a transfer: the local machine or a live session.
 #[derive(Clone)]
@@ -898,8 +931,7 @@ async fn record_progress(
     task_id: &str,
     transferred: u64,
     total: u64,
-    started: Instant,
-    base_offset: u64,
+    meter: &mut SpeedMeter,
 ) {
     {
         let mut map = tasks.lock().await;
@@ -908,12 +940,7 @@ async fn record_progress(
             t.total_bytes = total;
         }
     }
-    let elapsed = started.elapsed().as_secs_f64();
-    let speed = if elapsed > 0.0 {
-        transferred.saturating_sub(base_offset) as f64 / elapsed
-    } else {
-        0.0
-    };
+    let speed = meter.update(transferred);
     let _ = app.emit(
         "transfer:progress",
         TransferProgress {
@@ -992,22 +1019,24 @@ async fn run_copy(
         }
     }
 
-    // Same-host fast path: run the copy remotely, no local relay. Only for
-    // fresh transfers — it cannot resume or report incremental progress.
+    // Same-host fast path: run the copy remotely, no local relay. Only
+    // for fresh transfers — it cannot resume. Progress is tracked by
+    // polling the destination file size.
     if offset == 0 {
         if let Some((runner, script)) = server_side_copy_script(src, src_path, dst, dst_path).await
         {
             if let Some(outcome) = check_control(tasks, task_id).await {
                 return Ok(outcome);
             }
-            let started = Instant::now();
-            record_progress(tasks, app, task_id, 0, total, started, 0).await;
+            let mut meter = SpeedMeter::new(0);
+            record_progress(tasks, app, task_id, 0, total, &mut meter).await;
             log::info!("Transfer {} using server-side copy: {}", task_id, script);
             let argv = vec!["sh".to_string(), "-c".into(), script];
             // Spawn instead of run-to-completion so pause/cancel can
             // interrupt: dropping the stream closes the channel and
             // kills the remote pipeline.
             let mut stream = runner.spawn(&argv).await?;
+            let mut ticks: u32 = 0;
             let done = loop {
                 tokio::select! {
                     done = &mut stream.done => {
@@ -1019,6 +1048,16 @@ async fn run_copy(
                         if let Some(outcome) = check_control(tasks, task_id).await {
                             drop(stream);
                             return Ok(outcome);
+                        }
+                        // Poll the destination size (every other tick) so
+                        // the frontend sees live progress and speed.
+                        ticks += 1;
+                        if ticks % 2 == 0 {
+                            if let Ok(meta) = dst_fs.stat(dst_path).await {
+                                let written = meta.size.min(total);
+                                record_progress(tasks, app, task_id, written, total, &mut meter)
+                                    .await;
+                            }
                         }
                     }
                 }
@@ -1038,7 +1077,7 @@ async fn run_copy(
                     written, total
                 )));
             }
-            record_progress(tasks, app, task_id, total, total, started, 0).await;
+            record_progress(tasks, app, task_id, total, total, &mut meter).await;
             return Ok(Outcome::Completed);
         }
     }
@@ -1047,17 +1086,17 @@ async fn run_copy(
     let mut remote_reader = reader.reader;
     let mut writer = dst_fs.open_write(dst_path, offset).await?;
 
-    let started = Instant::now();
+    let mut meter = SpeedMeter::new(offset);
     let mut buf = vec![0u8; CHUNK_SIZE];
     let mut transferred: u64 = offset;
     let mut last_emit: u64 = offset;
 
-    record_progress(tasks, app, task_id, transferred, total, started, offset).await;
+    record_progress(tasks, app, task_id, transferred, total, &mut meter).await;
 
     loop {
         if let Some(outcome) = check_control(tasks, task_id).await {
             let _ = writer.flush().await;
-            record_progress(tasks, app, task_id, transferred, total, started, offset).await;
+            record_progress(tasks, app, task_id, transferred, total, &mut meter).await;
             return Ok(outcome);
         }
         let n = remote_reader
@@ -1074,7 +1113,7 @@ async fn run_copy(
         transferred += n as u64;
         if transferred - last_emit >= PROGRESS_EMIT_THRESHOLD {
             last_emit = transferred;
-            record_progress(tasks, app, task_id, transferred, total, started, offset).await;
+            record_progress(tasks, app, task_id, transferred, total, &mut meter).await;
         }
     }
 
@@ -1089,6 +1128,6 @@ async fn run_copy(
         )));
     }
 
-    record_progress(tasks, app, task_id, transferred, total, started, offset).await;
+    record_progress(tasks, app, task_id, transferred, total, &mut meter).await;
     Ok(Outcome::Completed)
 }
