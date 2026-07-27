@@ -3,6 +3,7 @@
 
 use shuttle_sftp::commands::prepare::PrepareRegistry;
 use shuttle_sftp::ssh::SessionManager;
+use shuttle_sftp::terminal::TerminalManager;
 use shuttle_sftp::transfer::TransferEngine;
 
 fn main() {
@@ -14,6 +15,7 @@ fn main() {
         .manage(SessionManager::new())
         .manage(TransferEngine::new(3))
         .manage(PrepareRegistry::default())
+        .manage(TerminalManager::default())
         .invoke_handler(tauri::generate_handler![
             shuttle_sftp::commands::connection::connect,
             shuttle_sftp::commands::connection::connect_local,
@@ -41,6 +43,10 @@ fn main() {
             shuttle_sftp::commands::transfer::show_in_folder,
             shuttle_sftp::commands::transfer::list_transfers,
             shuttle_sftp::commands::prepare::cancel_prepare,
+            shuttle_sftp::commands::terminal::terminal_open,
+            shuttle_sftp::commands::terminal::terminal_input,
+            shuttle_sftp::commands::terminal::terminal_resize,
+            shuttle_sftp::commands::terminal::terminal_close,
             shuttle_sftp::commands::config::load_ssh_config,
             shuttle_sftp::commands::config::list_imported_ssh_hosts,
             shuttle_sftp::commands::config::set_imported_ssh_hosts,

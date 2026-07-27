@@ -28,6 +28,7 @@ A fast, lightweight, cross-platform SFTP/SCP GUI built with **Tauri 2 + Vue 3 + 
 - 🔁 **Resume After Restart** — Interrupted transfers persist and come back as paused; resume auto-reconnects using saved credentials and opens the matching tab
 - 🧹 **Safe Cancel** — Cancelling a download asks whether to delete the partial local file (or the whole folder for directory downloads)
 - ⭐ **Bookmarks** — Right-click any remote folder to bookmark it (with custom alias); the bookmarks window groups paths per server (collapsible tree), and connecting opens a tab labeled `user@alias`
+- 🖥️ **Integrated Terminal** — Toolbar button opens a shell in the current directory (local PTY or SSH); browsing inside a container or pod auto-attaches via `docker`/`nerdctl`/`crictl`/`kubectl exec`. Multiple terminals per tab (each tab keeps its own set), resizable drawer height
 - 🔑 **Flexible Auth** — Password, private key (with passphrase), SSH agent
 - 📋 **SSH Config Import** — Pick which `~/.ssh/config` hosts to import (checkbox picker with filter); only imported hosts appear in the fuzzy-search dropdown
 - 💾 **Saved Profiles** — Save connections (optionally with credentials) for quick reuse, with or without connecting; aliases are globally unique across profiles and SSH config hosts
@@ -93,9 +94,10 @@ ShuttleSFTP/
 │   │   ├── browser/        # Remote file browser panel
 │   │   ├── connection/     # Connect dialog, SSH config
 │   │   ├── layout/         # Tab bar, toolbar
+│   │   ├── terminal/       # Integrated terminal (xterm.js)
 │   │   └── transfer/       # Transfer queue UI
 │   ├── composables/        # Tauri IPC wrappers
-│   ├── stores/             # Pinia state (tabs, transfers, clipboard)
+│   ├── stores/             # Pinia state (tabs, transfers, terminals, clipboard)
 │   └── types/              # TypeScript interfaces
 ├── src-tauri/              # Rust backend
 │   └── src/
@@ -103,6 +105,7 @@ ShuttleSFTP/
 │       ├── ssh/            # SSH session, auth, SFTP ops
 │       ├── exec/           # Command runners (local & over SSH)
 │       ├── container/      # Container/pod discovery + exec file access
+│       ├── terminal/       # Interactive PTY terminals (SSH & local)
 │       ├── transfer/       # Transfer engine & progress
 │       ├── config/         # SSH config parser, profiles
 │       └── commands/       # Tauri IPC command handlers
@@ -126,6 +129,7 @@ ShuttleSFTP/
 11. **Preview & edit**: Click a text file to preview it with line numbers and soft wrap — 🗖 maximizes the pane. Click ✏️ to edit in place (paste/undo work natively), then 💾 or Ctrl+S saves back to the server; ✕ discards
 12. **Bookmark**: Right-click a remote folder → **⭐ Add Bookmark** (alias defaults to the path; container/pod paths work too). Click **⭐ Bookmarks** in the toolbar: bookmarks are grouped by server (`user@alias`, or `user@ip:port` when no alias) — click a server row to expand its paths, then connect or delete
 13. **Transfers**: The queue at the bottom shows per-file and folder-level progress with live speed. Use ⏸ / ▶ / ✕ on each row (or the header buttons for all), ℹ for details (from/to/size/server), and 📂 to reveal the local file. Interrupted transfers reappear as paused after a restart — ▶ resumes from the last byte, reconnecting automatically when credentials are saved
+14. **Terminal**: Click **🖥 Terminal** to open a shell in the current directory — a local PTY for "This Machine" sessions, an SSH shell for remote hosts, and an automatic `exec` attach when you're inside `/@containers/...` or `/@pods/...`. Each browser tab keeps its own terminals: use **+** in the drawer to open more, click a chip to switch, ✕ to close, and drag the drawer's top edge to resize
 
 ### Container & pod access notes
 
@@ -179,7 +183,7 @@ GitHub Actions builds installers for all platforms and publishes them to a GitHu
 - [x] Any-to-any copy (Copy/Paste + drag & drop across sessions, server-side fast path)
 - [x] Clone & save connections (duplicate profiles / SSH config hosts, save without connecting, unique aliases)
 - [ ] SSH agent forwarding
-- [ ] Integrated SSH terminal
+- [x] Integrated terminal (local PTY / SSH shell, container & pod auto-attach, multi-terminal per tab)
 - [ ] Proxy support (SOCKS5/HTTP)
 - [ ] i18n (English, 中文)
 

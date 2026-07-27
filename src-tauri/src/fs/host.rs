@@ -281,6 +281,55 @@ impl RemoteFs for HostFs {
         "host"
     }
 
+    async fn terminal_spec(&self, path: &str) -> AppResult<crate::fs::TerminalSpec> {
+        use crate::fs::TerminalSpec;
+        /// Interactive shell script run inside a container: cd into the
+        /// browsed directory, prefer bash when the image has it.
+        fn attach_script(dir: &str) -> String {
+            format!(
+                "cd {} 2>/dev/null; if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi",
+                crate::exec::shell_quote(dir)
+            )
+        }
+        match self.route(path) {
+            Route::Base(p) => Ok(TerminalSpec::HostDir(p)),
+            Route::Container(name, inner) => {
+                // Ensure the container index is populated (e.g. a terminal
+                // opened right after restoring a bookmark).
+                let info = {
+                    let map = self.containers.lock().unwrap();
+                    map.get(&name).map(|e| e.info.clone())
+                };
+                let info = match info {
+                    Some(i) => i,
+                    None => {
+                        self.refresh_containers().await?;
+                        let map = self.containers.lock().unwrap();
+                        map.get(&name).map(|e| e.info.clone()).ok_or_else(|| {
+                            AppError::IoError(format!("No running container named '{}'", name))
+                        })?
+                    }
+                };
+                let target = ExecTarget::container(info.runtime, info.id);
+                let mut argv = target.exec_prefix_tty();
+                argv.push("sh".into());
+                argv.push("-c".into());
+                argv.push(attach_script(&inner));
+                Ok(TerminalSpec::Command(argv))
+            }
+            Route::PodContainer(ns, pod, c, inner) => {
+                let target = ExecTarget::pod(None, ns, pod, Some(c));
+                let mut argv = target.exec_prefix_tty();
+                argv.push("sh".into());
+                argv.push("-c".into());
+                argv.push(attach_script(&inner));
+                Ok(TerminalSpec::Command(argv))
+            }
+            // Virtual listing levels: fall back to a host shell at home.
+            _ => Ok(TerminalSpec::HostDir(String::new())),
+        }
+    }
+
     fn supports_resume_at(&self, path: &str) -> bool {
         match self.route(path) {
             Route::Base(p) => self.base.supports_resume_at(&p),

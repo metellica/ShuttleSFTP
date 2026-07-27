@@ -7,6 +7,7 @@ import BookmarksDialog from '@/components/connection/BookmarksDialog.vue'
 import RemotePanel from '@/components/browser/RemotePanel.vue'
 import TransferQueue from '@/components/transfer/TransferQueue.vue'
 import PrepareOverlay from '@/components/layout/PrepareOverlay.vue'
+import TerminalPanel from '@/components/terminal/TerminalPanel.vue'
 import { ref, onMounted, onUnmounted } from 'vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
@@ -14,6 +15,7 @@ import { uploadFiles, downloadFiles, mkDir, listBookmarks } from '@/composables/
 import { promptText } from '@/composables/usePrompt'
 import { useTransferStore } from '@/stores/transfer'
 import { usePrepareStore, type PrepareProgressEvent } from '@/stores/prepare'
+import { useTerminalsStore } from '@/stores/terminals'
 import type { TransferProgress, TransferTask } from '@/types/transfer'
 import type { ConnectedMeta } from '@/types/connection'
 
@@ -24,6 +26,13 @@ const showConnectDialog = ref(false)
 const showBookmarksDialog = ref(false)
 const remotePanelRef = ref<InstanceType<typeof RemotePanel> | null>(null)
 const unlisteners: UnlistenFn[] = []
+const terminalsStore = useTerminalsStore()
+
+function onOpenTerminal() {
+  const tab = tabsStore.activeTab
+  if (!tab?.sessionId) return
+  terminalsStore.open(tab.id, tab.sessionId, tab.currentPath)
+}
 
 // Coalesce high-frequency backend events: progress updates are batched
 // and applied at most every 100ms; bulk re-syncs are debounced. Keeps
@@ -282,6 +291,7 @@ async function onNewFolder() {
       @download="onDownload"
       @refresh="onRefresh"
       @new-folder="onNewFolder"
+      @terminal="onOpenTerminal"
     />
     <main class="main-content">
       <RemotePanel v-if="tabsStore.activeTab?.status === 'connected'" ref="remotePanelRef" />
@@ -289,6 +299,7 @@ async function onNewFolder() {
         <p>Click "Connect" or press the + tab to start a new SFTP session</p>
       </div>
     </main>
+    <TerminalPanel />
     <TransferQueue />
     <PrepareOverlay />
     <ConnectDialog
