@@ -42,6 +42,17 @@ pub trait FsWriter: AsyncWrite + Send + Unpin {
     async fn finish(self: Box<Self>) -> AppResult<()>;
 }
 
+/// How to open an interactive terminal for a browsed path.
+#[derive(Debug, Clone)]
+pub enum TerminalSpec {
+    /// Shell on the endpoint's host machine, starting in this directory
+    /// (empty = home directory).
+    HostDir(String),
+    /// Interactive argv to run on the host machine with a TTY
+    /// (container/pod attach).
+    Command(Vec<String>),
+}
+
 /// Abstraction over any browsable/transferable file system endpoint:
 /// SFTP, the local machine, a container (exec-based) or a container
 /// rootfs exposed through the host.
@@ -49,6 +60,11 @@ pub trait FsWriter: AsyncWrite + Send + Unpin {
 pub trait RemoteFs: Send + Sync {
     /// Short backend identifier ("sftp", "local", "exec", "rootfs").
     fn kind(&self) -> &'static str;
+
+    /// How to open an interactive terminal at `path` on this endpoint.
+    async fn terminal_spec(&self, path: &str) -> AppResult<TerminalSpec> {
+        Ok(TerminalSpec::HostDir(path.to_string()))
+    }
 
     /// Whether reads/writes can start at a byte offset (resume support).
     fn supports_resume(&self) -> bool {

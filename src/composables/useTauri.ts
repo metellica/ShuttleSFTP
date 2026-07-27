@@ -121,6 +121,19 @@ export const showInFolder = (path: string) =>
 export const listTransfers = () =>
   invoke<TransferTask[]>('list_transfers')
 
+// Terminal
+export const terminalOpen = (sessionId: string, path: string, cols: number, rows: number) =>
+  invoke<string>('terminal_open', { sessionId, path, cols, rows })
+
+export const terminalInput = (terminalId: string, data: string) =>
+  invoke<void>('terminal_input', { terminalId, data })
+
+export const terminalResize = (terminalId: string, cols: number, rows: number) =>
+  invoke<void>('terminal_resize', { terminalId, cols, rows })
+
+export const terminalClose = (terminalId: string) =>
+  invoke<void>('terminal_close', { terminalId })
+
 // Config
 export const loadSshConfig = () =>
   invoke<SshHostEntry[]>('load_ssh_config')

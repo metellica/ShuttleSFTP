@@ -7,6 +7,7 @@ const emit = defineEmits<{
   download: []
   refresh: []
   newFolder: []
+  terminal: []
 }>()
 </script>
 
@@ -32,6 +33,9 @@ const emit = defineEmits<{
     </button>
     <button class="btn" @click="emit('newFolder')">
       <span>📁</span> New Folder
+    </button>
+    <button class="btn" @click="emit('terminal')">
+      <span>🖥</span> Terminal
     </button>
   </div>
 </template>

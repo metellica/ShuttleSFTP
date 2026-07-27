@@ -306,11 +306,20 @@ impl ExecTarget {
 
     /// argv prefix in front of the in-container command.
     pub fn exec_prefix(&self) -> Vec<String> {
+        self.exec_prefix_flags("-i")
+    }
+
+    /// argv prefix allocating a TTY, for interactive shells.
+    pub fn exec_prefix_tty(&self) -> Vec<String> {
+        self.exec_prefix_flags("-it")
+    }
+
+    fn exec_prefix_flags(&self, flags: &str) -> Vec<String> {
         match self.runtime {
             RuntimeKind::Kubectl => {
                 let mut v = kubectl_base(self.context.as_deref());
                 v.push("exec".into());
-                v.push("-i".into());
+                v.push(flags.into());
                 if let Some(ns) = &self.namespace {
                     v.push("-n".into());
                     v.push(ns.clone());
@@ -328,7 +337,7 @@ impl ExecTarget {
             rt => vec![
                 rt.as_str().to_string(),
                 "exec".into(),
-                "-i".into(),
+                flags.into(),
                 self.container_id.clone(),
             ],
         }
