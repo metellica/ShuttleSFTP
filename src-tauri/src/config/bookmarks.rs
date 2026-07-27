@@ -12,6 +12,10 @@ pub struct Bookmark {
     pub host: String,
     pub port: u16,
     pub username: String,
+    /// Connection alias (profile name / SSH config alias) of the tab the
+    /// bookmark was created from; used for display instead of host:port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_alias: Option<String>,
     pub auth_method: String, // "password" | "key" | "agent"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub private_key_path: Option<String>,

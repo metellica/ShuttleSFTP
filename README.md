@@ -27,7 +27,7 @@ A fast, lightweight, cross-platform SFTP/SCP GUI built with **Tauri 2 + Vue 3 + 
 - ⏯️ **Pause / Resume / Cancel** — Per file, per folder, or all at once; resume continues from the transferred offset
 - 🔁 **Resume After Restart** — Interrupted transfers persist and come back as paused; resume auto-reconnects using saved credentials and opens the matching tab
 - 🧹 **Safe Cancel** — Cancelling a download asks whether to delete the partial local file (or the whole folder for directory downloads)
-- ⭐ **Bookmarks** — Right-click any remote folder to bookmark it (with custom alias), then one-click reconnect straight into that path
+- ⭐ **Bookmarks** — Right-click any remote folder to bookmark it (with custom alias); the bookmarks window groups paths per server (collapsible tree), and connecting opens a tab labeled `user@alias`
 - 🔑 **Flexible Auth** — Password, private key (with passphrase), SSH agent
 - 📋 **SSH Config Import** — Pick which `~/.ssh/config` hosts to import (checkbox picker with filter); only imported hosts appear in the fuzzy-search dropdown
 - 💾 **Saved Profiles** — Save connections (optionally with credentials) for quick reuse, with or without connecting; aliases are globally unique across profiles and SSH config hosts
@@ -124,7 +124,7 @@ ShuttleSFTP/
 9. **Copy between sessions**: right-click → **📋 Copy** (or **Ctrl/Cmd+C**), then navigate anywhere (another folder, another tab, into a container) and right-click → **📥 Paste** (or **Ctrl/Cmd+V** — pastes into the current directory, or into the selected folder) — or drag the selection onto a folder or onto another tab. Copies between two paths on the same host run server-side (no relay through your machine). Right-click blank space for **Paste / New Folder / Refresh**
 10. **Delete**: Right-click the selection → **🗑 Delete** — a confirmation dialog appears before anything is removed (folders are deleted recursively)
 11. **Preview & edit**: Click a text file to preview it with line numbers and soft wrap — 🗖 maximizes the pane. Click ✏️ to edit in place (paste/undo work natively), then 💾 or Ctrl+S saves back to the server; ✕ discards
-12. **Bookmark**: Right-click a remote folder → **⭐ Add Bookmark** (alias defaults to the path; container/pod paths work too). Click **⭐ Bookmarks** in the toolbar to see all bookmarks (alias + remote + path) and connect or delete
+12. **Bookmark**: Right-click a remote folder → **⭐ Add Bookmark** (alias defaults to the path; container/pod paths work too). Click **⭐ Bookmarks** in the toolbar: bookmarks are grouped by server (`user@alias`, or `user@ip:port` when no alias) — click a server row to expand its paths, then connect or delete
 13. **Transfers**: The queue at the bottom shows per-file and folder-level progress with live speed. Use ⏸ / ▶ / ✕ on each row (or the header buttons for all), ℹ for details (from/to/size/server), and 📂 to reveal the local file. Interrupted transfers reappear as paused after a restart — ▶ resumes from the last byte, reconnecting automatically when credentials are saved
 
 ### Container & pod access notes

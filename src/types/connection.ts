@@ -59,6 +59,8 @@ export interface Bookmark {
   host: string
   port: number
   username: string
+  /** Connection alias (profile/SSH config name) for display; falls back to host:port. */
+  hostAlias?: string
   authMethod: 'password' | 'key' | 'agent'
   privateKeyPath?: string
   /** Present only when captured from a password connection. */

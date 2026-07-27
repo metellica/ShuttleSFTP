@@ -866,12 +866,21 @@ async function ctxAddBookmark() {
   const alias = await promptText('Bookmark alias:', { defaultValue: path })
   if (alias === null) return
 
+  // Connection alias from the tab label ("user@alias"), for display
+  const prefix = `${params?.username ?? ''}@`
+  let hostAlias = tab.label.startsWith(prefix)
+    ? tab.label.slice(prefix.length)
+    : undefined
+  // Label was the bare host/IP, not a real alias: keep the ip:port fallback
+  if (hostAlias === params?.host) hostAlias = undefined
+
   const bookmark: Bookmark = {
     id: crypto.randomUUID(),
     alias: alias.trim() || path,
     host: params?.host ?? 'local',
     port: params?.port ?? 0,
     username: params?.username ?? '',
+    ...(hostAlias ? { hostAlias } : {}),
     authMethod: params ? params.auth.type : 'agent',
     path,
     kind: tab.kind,

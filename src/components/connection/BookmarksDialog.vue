@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import {
   listBookmarks,
   deleteBookmark,
@@ -17,6 +17,8 @@ const emit = defineEmits<{
 const bookmarks = ref<Bookmark[]>([])
 const connectingId = ref<string | null>(null)
 const error = ref('')
+/** Expanded server groups; everything starts collapsed. */
+const expanded = ref(new Set<string>())
 
 const KIND_ICONS: Record<string, string> = { ssh: '⌁', local: '💻' }
 
@@ -25,6 +27,42 @@ function bookmarkIcon(bm: Bookmark): string {
   if (bm.path.startsWith('/@containers')) return '▣'
   if (bm.path.startsWith('/@pods')) return '⎈'
   return KIND_ICONS[bm.kind ?? 'ssh'] ?? '⌁'
+}
+
+/** Bookmarks grouped per remote endpoint (user@host:port / local). */
+interface ServerGroup {
+  key: string
+  label: string
+  icon: string
+  items: Bookmark[]
+}
+
+const groups = computed<ServerGroup[]>(() => {
+  const map = new Map<string, ServerGroup>()
+  for (const bm of bookmarks.value) {
+    const isLocal = bm.kind === 'local' || bm.host === 'local'
+    const key = isLocal ? 'local' : `${bm.username}@${bm.host}:${bm.port}`
+    let group = map.get(key)
+    if (!group) {
+      group = {
+        key,
+        label: bookmarkTarget(bm),
+        icon: isLocal ? '💻' : '⌁',
+        items: [],
+      }
+      map.set(key, group)
+    }
+    group.items.push(bm)
+  }
+  const out = [...map.values()]
+  out.sort((a, b) => a.label.localeCompare(b.label))
+  for (const g of out) g.items.sort((a, b) => a.path.localeCompare(b.path))
+  return out
+})
+
+function toggleGroup(key: string) {
+  if (expanded.value.has(key)) expanded.value.delete(key)
+  else expanded.value.add(key)
 }
 
 onMounted(async () => {
@@ -69,7 +107,8 @@ async function connect(bm: Bookmark) {
       const params = await buildParams(bm)
       if (!params) return
       const sessionId = await sshConnect(params)
-      emit('connected', sessionId, `${bm.username}@${bm.alias}`, bm.path, {
+      const label = bm.hostAlias || `${bm.host}:${bm.port}`
+      emit('connected', sessionId, `${bm.username}@${label}`, bm.path, {
         kind: 'ssh',
         params,
       })
@@ -83,7 +122,8 @@ async function connect(bm: Bookmark) {
 
 function bookmarkTarget(bm: Bookmark): string {
   if (bm.kind === 'local' || bm.host === 'local') return 'This machine'
-  return `${bm.username}@${bm.host}:${bm.port}`
+  // Prefer the connection alias; fall back to ip:port for old bookmarks
+  return `${bm.username}@${bm.hostAlias || `${bm.host}:${bm.port}`}`
 }
 
 async function remove(bm: Bookmark) {
@@ -106,35 +146,44 @@ async function remove(bm: Bookmark) {
       </div>
 
       <div v-else class="list">
-        <div v-for="bm in bookmarks" :key="bm.id" class="item">
-          <div class="info" @dblclick="connect(bm)">
-            <div class="alias" :title="bm.alias">
-              <span class="kind-icon">{{ bookmarkIcon(bm) }}</span>
-              {{ bm.alias }}
-            </div>
-            <div class="detail" :title="`${bookmarkTarget(bm)} ${bm.path}`">
-              <span class="remote">{{ bookmarkTarget(bm) }}</span>
-              <span class="path">{{ bm.path }}</span>
-            </div>
+        <template v-for="group in groups" :key="group.key">
+          <div class="server-row" @click="toggleGroup(group.key)">
+            <span class="server-toggle">{{ expanded.has(group.key) ? '▾' : '▸' }}</span>
+            <span class="kind-icon">{{ group.icon }}</span>
+            <span class="server-label" :title="group.label">{{ group.label }}</span>
+            <span class="server-count">{{ group.items.length }}</span>
           </div>
-          <div class="item-actions">
-            <button
-              class="btn primary"
-              :disabled="connectingId !== null"
-              @click="connect(bm)"
-            >
-              {{ connectingId === bm.id ? 'Connecting…' : 'Connect' }}
-            </button>
-            <button
-              class="btn danger"
-              :disabled="connectingId !== null"
-              title="Delete bookmark"
-              @click="remove(bm)"
-            >
-              🗑
-            </button>
-          </div>
-        </div>
+          <template v-if="expanded.has(group.key)">
+            <div v-for="bm in group.items" :key="bm.id" class="item">
+              <div class="info" @dblclick="connect(bm)">
+                <div class="alias" :title="bm.alias">
+                  <span class="kind-icon">{{ bookmarkIcon(bm) }}</span>
+                  {{ bm.alias }}
+                </div>
+                <div class="detail" :title="bm.path">
+                  <span class="path">{{ bm.path }}</span>
+                </div>
+              </div>
+              <div class="item-actions">
+                <button
+                  class="btn primary"
+                  :disabled="connectingId !== null"
+                  @click="connect(bm)"
+                >
+                  {{ connectingId === bm.id ? 'Connecting…' : 'Connect' }}
+                </button>
+                <button
+                  class="btn danger"
+                  :disabled="connectingId !== null"
+                  title="Delete bookmark"
+                  @click="remove(bm)"
+                >
+                  🗑
+                </button>
+              </div>
+            </div>
+          </template>
+        </template>
       </div>
 
       <div v-if="error" class="error">{{ error }}</div>
@@ -189,11 +238,55 @@ h2 {
   gap: 6px;
 }
 
+.server-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #2a2a40;
+  border: 1px solid #313244;
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.server-row:hover {
+  border-color: #45475a;
+}
+
+.server-toggle {
+  color: #a6adc8;
+  font-size: 11px;
+  width: 12px;
+  flex-shrink: 0;
+}
+
+.server-label {
+  flex: 1;
+  min-width: 0;
+  color: #cdd6f4;
+  font-weight: 600;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-count {
+  color: #6c7086;
+  font-size: 11px;
+  background: #313244;
+  border-radius: 8px;
+  padding: 1px 8px;
+  flex-shrink: 0;
+}
+
 .item {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
+  padding: 6px 10px;
+  margin-left: 22px;
   background: #24243a;
   border: 1px solid #313244;
   border-radius: 6px;
