@@ -4,7 +4,13 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { terminalOpen, terminalInput, terminalResize, terminalClose } from '@/composables/useTauri'
+import {
+  terminalReserve,
+  terminalOpen,
+  terminalInput,
+  terminalResize,
+  terminalClose,
+} from '@/composables/useTauri'
 
 const props = defineProps<{
   sessionId: string
@@ -22,7 +28,9 @@ const exited = ref(false)
 let term: Terminal | null = null
 let fit: FitAddon | null = null
 let terminalId: string | null = null
+let terminalToken: string | null = null
 let resizeObserver: ResizeObserver | null = null
+let disposed = false
 const unlisteners: UnlistenFn[] = []
 
 function b64encode(data: string): string {
@@ -37,6 +45,30 @@ function b64decode(data: string): Uint8Array {
   const bytes = new Uint8Array(bin.length)
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
   return bytes
+}
+
+function onData(id: string, data: string) {
+  if (id === terminalId) term?.write(b64decode(data))
+}
+
+function onExit(id: string) {
+  if (id !== terminalId || exited.value) return
+  exited.value = true
+  term?.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n')
+  emit('exited')
+}
+
+/** Register a listener, unregistering at once if we already unmounted. */
+async function addListener<T>(event: string, handler: (payload: T) => void) {
+  const un = await listen<T>(event, (e) => handler(e.payload))
+  if (disposed) un()
+  else unlisteners.push(un)
+}
+
+/** Drop the global event listeners. */
+function stopListening() {
+  unlisteners.forEach((u) => u())
+  unlisteners.length = 0
 }
 
 onMounted(async () => {
@@ -57,37 +89,56 @@ onMounted(async () => {
   term.open(termEl.value)
   fit.fit()
 
+  // The id is ours, so listeners can filter by it before the shell exists:
+  // initial output and immediate exits are caught without buffering, and
+  // closing the view cancels a still-starting (possibly stalled) terminal.
+  terminalId = crypto.randomUUID()
+  await addListener<{ id: string; data: string }>('terminal:data', (p) => onData(p.id, p.data))
+  await addListener<{ id: string }>('terminal:exit', (p) => onExit(p.id))
+  if (disposed) return
+
   try {
-    terminalId = await terminalOpen(props.sessionId, props.path, term.cols, term.rows)
+    terminalToken = await terminalReserve(terminalId)
+    if (disposed) {
+      await terminalClose(terminalId, terminalToken)
+      terminalId = null
+      terminalToken = null
+      return
+    }
+    await terminalOpen(
+      terminalId,
+      terminalToken,
+      props.sessionId,
+      props.path,
+      term.cols,
+      term.rows
+    )
   } catch (e: any) {
-    error.value = e?.toString() || 'Cannot open terminal'
+    // Unmount closes the terminal, which makes a pending open fail: that
+    // rejection is expected and there is nothing left to show or listen to.
+    if (!disposed) {
+      error.value = e?.toString() || 'Cannot open terminal'
+      stopListening()
+    }
+    terminalId = null
+    terminalToken = null
     return
   }
-  const id = terminalId
-
-  unlisteners.push(
-    await listen<{ id: string; data: string }>('terminal:data', (e) => {
-      if (e.payload.id === id) term?.write(b64decode(e.payload.data))
-    })
-  )
-  unlisteners.push(
-    await listen<{ id: string }>('terminal:exit', (e) => {
-      if (e.payload.id === id) {
-        exited.value = true
-        term?.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n')
-        emit('exited')
-      }
-    })
-  )
+  if (disposed) {
+    terminalClose(terminalId, terminalToken).catch(() => {})
+    terminalId = null
+    terminalToken = null
+    return
+  }
 
   term.onData((data) => {
-    if (terminalId && !exited.value) {
-      terminalInput(terminalId, b64encode(data)).catch(() => {})
+    if (terminalId && terminalToken && !exited.value) {
+      terminalInput(terminalId, terminalToken, b64encode(data)).catch(() => {})
     }
   })
   term.onResize(({ cols, rows }) => {
-    if (terminalId && !exited.value) {
-      terminalResize(terminalId, cols, rows).catch(() => {})
+    if (terminalId && terminalToken && !exited.value) {
+      terminalResize(terminalId, terminalToken, cols, rows).catch(() => {})
     }
   })
 
@@ -99,7 +150,7 @@ onMounted(async () => {
       if (props.visible) fit?.fit()
     })
   })
-  resizeObserver.observe(termEl.value)
+  if (termEl.value) resizeObserver.observe(termEl.value)
   if (props.visible) term.focus()
 })
 
@@ -116,9 +167,10 @@ watch(
 )
 
 onBeforeUnmount(() => {
+  disposed = true
   resizeObserver?.disconnect()
-  unlisteners.forEach((u) => u())
-  if (terminalId) terminalClose(terminalId).catch(() => {})
+  stopListening()
+  if (terminalId && terminalToken) terminalClose(terminalId, terminalToken).catch(() => {})
   term?.dispose()
 })
 </script>

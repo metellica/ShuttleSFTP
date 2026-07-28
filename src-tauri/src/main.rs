@@ -43,6 +43,7 @@ fn main() {
             shuttle_sftp::commands::transfer::show_in_folder,
             shuttle_sftp::commands::transfer::list_transfers,
             shuttle_sftp::commands::prepare::cancel_prepare,
+            shuttle_sftp::commands::terminal::terminal_reserve,
             shuttle_sftp::commands::terminal::terminal_open,
             shuttle_sftp::commands::terminal::terminal_input,
             shuttle_sftp::commands::terminal::terminal_resize,

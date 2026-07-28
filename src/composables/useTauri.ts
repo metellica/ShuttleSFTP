@@ -122,17 +122,33 @@ export const listTransfers = () =>
   invoke<TransferTask[]>('list_transfers')
 
 // Terminal
-export const terminalOpen = (sessionId: string, path: string, cols: number, rows: number) =>
-  invoke<string>('terminal_open', { sessionId, path, cols, rows })
+export const terminalReserve = (terminalId: string) =>
+  invoke<string>('terminal_reserve', { terminalId })
 
-export const terminalInput = (terminalId: string, data: string) =>
-  invoke<void>('terminal_input', { terminalId, data })
+export const terminalOpen = (
+  terminalId: string,
+  terminalToken: string,
+  sessionId: string,
+  path: string,
+  cols: number,
+  rows: number
+) =>
+  invoke<void>('terminal_open', {
+    request: { terminalId, terminalToken, sessionId, path, cols, rows },
+  })
 
-export const terminalResize = (terminalId: string, cols: number, rows: number) =>
-  invoke<void>('terminal_resize', { terminalId, cols, rows })
+export const terminalInput = (terminalId: string, terminalToken: string, data: string) =>
+  invoke<void>('terminal_input', { terminalId, terminalToken, data })
 
-export const terminalClose = (terminalId: string) =>
-  invoke<void>('terminal_close', { terminalId })
+export const terminalResize = (
+  terminalId: string,
+  terminalToken: string,
+  cols: number,
+  rows: number
+) => invoke<void>('terminal_resize', { terminalId, terminalToken, cols, rows })
+
+export const terminalClose = (terminalId: string, terminalToken: string) =>
+  invoke<void>('terminal_close', { terminalId, terminalToken })
 
 // Config
 export const loadSshConfig = () =>

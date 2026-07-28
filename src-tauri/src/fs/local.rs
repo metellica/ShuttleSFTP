@@ -68,7 +68,7 @@ fn to_entry(dir: &str, name: String, meta: &std::fs::Metadata) -> FileEntry {
 /// represented as "/C:/Users/...". Native Windows paths ("C:\...") and
 /// current-drive paths pass through unchanged.
 #[cfg(windows)]
-fn native_path(path: &str) -> PathBuf {
+pub fn native_path(path: &str) -> PathBuf {
     let p = path.strip_prefix('/').unwrap_or(path);
     let bytes = p.as_bytes();
     if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
@@ -83,7 +83,7 @@ fn native_path(path: &str) -> PathBuf {
 }
 
 #[cfg(not(windows))]
-fn native_path(path: &str) -> PathBuf {
+pub fn native_path(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
@@ -129,7 +129,10 @@ impl RemoteFs for LocalFs {
     async fn stat(&self, path: &str) -> AppResult<FileStat> {
         #[cfg(windows)]
         if is_virtual_root(path) {
-            return Ok(FileStat { size: 0, is_dir: true });
+            return Ok(FileStat {
+                size: 0,
+                is_dir: true,
+            });
         }
         let meta = tokio::fs::metadata(native_path(path))
             .await
