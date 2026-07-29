@@ -43,6 +43,91 @@ function setViewMode(mode: ViewMode) {
   viewMode.value = mode
   localStorage.setItem('viewMode', mode)
 }
+
+// --- Sorting -------------------------------------------------------------
+type SortKey = 'name' | 'size' | 'permissions' | 'modified'
+const SORT_KEYS: SortKey[] = ['name', 'size', 'permissions', 'modified']
+const storedSortKey = localStorage.getItem('sortKey') as SortKey | null
+const sortKey = ref<SortKey>(
+  storedSortKey && SORT_KEYS.includes(storedSortKey) ? storedSortKey : 'name'
+)
+const sortAsc = ref(localStorage.getItem('sortAsc') !== 'false')
+
+/** Click a column header: toggle direction when already sorted by it. */
+function setSort(key: SortKey) {
+  if (sortKey.value === key) {
+    sortAsc.value = !sortAsc.value
+  } else {
+    sortKey.value = key
+    sortAsc.value = true
+  }
+  localStorage.setItem('sortKey', sortKey.value)
+  localStorage.setItem('sortAsc', String(sortAsc.value))
+  resortLoaded()
+}
+
+function sortIndicator(key: SortKey): string {
+  if (sortKey.value !== key) return ''
+  return sortAsc.value ? '▲' : '▼'
+}
+
+/** Re-sort already loaded entries in place, without hitting the server again. */
+function resortLoaded() {
+  listEntries.value = sortEntries([...listEntries.value])
+  columns.value = columns.value.map((c) => ({ ...c, entries: sortEntries([...c.entries]) }))
+}
+
+// --- Fuzzy filter (current folder only) ----------------------------------
+const filterActive = ref(false)
+const filterQuery = ref('')
+const filterInputEl = ref<HTMLInputElement | null>(null)
+const filterText = computed(() => filterQuery.value.trim())
+
+/** Case-insensitive substring match, falling back to a subsequence match. */
+function fuzzyMatch(name: string, query: string): boolean {
+  if (!query) return true
+  const n = name.toLowerCase()
+  const q = query.toLowerCase()
+  if (n.includes(q)) return true
+  let i = 0
+  for (const ch of q) {
+    if (ch === ' ') continue
+    i = n.indexOf(ch, i)
+    if (i === -1) return false
+    i++
+  }
+  return true
+}
+
+function applyFilter(entries: FileEntry[]): FileEntry[] {
+  const q = filterText.value
+  return q ? entries.filter((e) => fuzzyMatch(e.name, q)) : entries
+}
+
+const visibleListEntries = computed(() => applyFilter(listEntries.value))
+
+/** The filter only narrows the folder the user is currently in. */
+function visibleEntries(col: Column): FileEntry[] {
+  return col.path === currentPath.value ? applyFilter(col.entries) : col.entries
+}
+
+function openFilter() {
+  filterActive.value = true
+  nextTick(() => {
+    filterInputEl.value?.focus()
+    filterInputEl.value?.select()
+  })
+}
+
+function closeFilter() {
+  filterActive.value = false
+  filterQuery.value = ''
+}
+
+function toggleFilter() {
+  if (filterActive.value) closeFilter()
+  else openFilter()
+}
 const ctxMenu = ref<{
   visible: boolean
   x: number
@@ -225,18 +310,42 @@ const breadcrumbs = computed(() => {
 
 // Selected files across the active view (for toolbar download)
 const allEntries = computed(() =>
-  viewMode.value === 'columns' ? columns.value.flatMap((c) => c.entries) : listEntries.value
+  viewMode.value === 'columns'
+    ? columns.value.flatMap((c) => visibleEntries(c))
+    : visibleListEntries.value
 )
 const selectedFiles = computed(() =>
   allEntries.value.filter((f) => selectedPaths.value.has(f.path))
 )
 defineExpose({ selectedFiles, refresh })
 
+function compareByName(a: FileEntry, b: FileEntry): number {
+  return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+}
+
+function compareEntries(a: FileEntry, b: FileEntry): number {
+  // Folders always stay on top, regardless of the sort direction
+  if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
+  let r = 0
+  switch (sortKey.value) {
+    case 'size':
+      r = a.size - b.size
+      break
+    case 'modified':
+      r = a.modified - b.modified
+      break
+    case 'permissions':
+      r = (a.permissions || '').localeCompare(b.permissions || '')
+      break
+    default:
+      r = compareByName(a, b)
+  }
+  if (r === 0) r = compareByName(a, b)
+  return sortAsc.value ? r : -r
+}
+
 function sortEntries(entries: FileEntry[]): FileEntry[] {
-  return entries.sort((a, b) => {
-    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
-    return a.name.localeCompare(b.name)
-  })
+  return entries.sort(compareEntries)
 }
 
 async function loadColumn(path: string): Promise<Column> {
@@ -372,7 +481,7 @@ async function onEntryClick(colIndex: number, entry: FileEntry, event: MouseEven
     // Range select within this column, anchored at the last non-shift click
     const anchor = selectionAnchor.value
     const anchorPath = anchor && anchor.colIndex === colIndex ? anchor.path : null
-    selectRange(col.entries, entry, anchorPath, event.ctrlKey || event.metaKey)
+    selectRange(visibleEntries(col), entry, anchorPath, event.ctrlKey || event.metaKey)
     return
   }
 
@@ -543,7 +652,7 @@ function onListClick(entry: FileEntry, event: MouseEvent) {
   if (event.shiftKey) {
     const anchor = selectionAnchor.value
     const anchorPath = anchor && anchor.colIndex === null ? anchor.path : null
-    selectRange(listEntries.value, entry, anchorPath, event.ctrlKey || event.metaKey)
+    selectRange(visibleListEntries.value, entry, anchorPath, event.ctrlKey || event.metaKey)
     return
   }
   if (event.ctrlKey || event.metaKey) {
@@ -950,11 +1059,25 @@ function onClipboardKeydown(e: KeyboardEvent) {
   }
 }
 
+/** Ctrl/Cmd+F opens the folder filter, Esc closes it. */
+function onFilterKeydown(e: KeyboardEvent) {
+  const t = e.target as HTMLElement | null
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') {
+    if (t && (t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+    e.preventDefault()
+    openFilter()
+  } else if (e.key === 'Escape' && filterActive.value) {
+    if (t && (t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+    closeFilter()
+  }
+}
+
 onMounted(async () => {
   window.addEventListener('click', hideCtxMenu)
   window.addEventListener('resize', scheduleRecompute)
   window.addEventListener('keydown', onNavKeydown)
   window.addEventListener('keydown', onClipboardKeydown)
+  window.addEventListener('keydown', onFilterKeydown)
   window.addEventListener('mouseup', onNavMouseUp)
   unlistenDragDrop = await getCurrentWebview().onDragDropEvent(async (event) => {
     if (event.payload.type === 'enter' || event.payload.type === 'over') {
@@ -983,6 +1106,7 @@ onUnmounted(() => {
   window.removeEventListener('resize', scheduleRecompute)
   window.removeEventListener('keydown', onNavKeydown)
   window.removeEventListener('keydown', onClipboardKeydown)
+  window.removeEventListener('keydown', onFilterKeydown)
   window.removeEventListener('mouseup', onNavMouseUp)
   unlistenDragDrop?.()
 })
@@ -997,6 +1121,7 @@ watch(
     selectedPaths.value.clear()
     selectionAnchor.value = null
     preview.value = { entry: null, loading: false, data: null }
+    filterQuery.value = ''
     if (viewMode.value === 'columns') {
       buildColumns(newPath)
     } else {
@@ -1074,6 +1199,25 @@ watch(viewMode, () => {
         <button class="toggle-btn" title="Copy path" @click="copyPath">📋</button>
         <button class="toggle-btn" title="Edit path" @click="startPathEdit">✏️</button>
       </template>
+      <div class="filter-box">
+        <input
+          v-if="filterActive"
+          ref="filterInputEl"
+          v-model="filterQuery"
+          class="filter-input"
+          placeholder="Filter files…"
+          spellcheck="false"
+          @keydown.esc.stop.prevent="closeFilter"
+        />
+        <button
+          class="toggle-btn"
+          :class="{ active: filterActive }"
+          title="Filter files in this folder (Ctrl+F)"
+          @click="toggleFilter"
+        >
+          🔍
+        </button>
+      </div>
       <div class="view-toggle">
         <button
           class="toggle-btn"
@@ -1113,7 +1257,7 @@ watch(viewMode, () => {
           <div v-if="col.loading" class="col-loading">Loading...</div>
           <template v-else>
             <div
-              v-for="entry in col.entries"
+              v-for="entry in visibleEntries(col)"
               :key="entry.path"
               class="entry"
               :class="{
@@ -1134,7 +1278,9 @@ watch(viewMode, () => {
               <span v-if="!entry.isDir" class="entry-size">{{ formatSize(entry.size) }}</span>
               <span v-else class="entry-arrow">›</span>
             </div>
-            <div v-if="col.entries.length === 0" class="col-empty">Empty</div>
+            <div v-if="visibleEntries(col).length === 0" class="col-empty">
+              {{ col.entries.length > 0 ? 'No matches' : 'Empty' }}
+            </div>
           </template>
         </div>
       </div>
@@ -1150,13 +1296,37 @@ watch(viewMode, () => {
         <div v-if="listLoading" class="col-loading">Loading...</div>
         <template v-else>
           <div class="file-header">
-            <span class="col-name">Name</span>
-            <span class="col-size">Size</span>
-            <span class="col-perm">Permissions</span>
-            <span class="col-date">Modified</span>
+            <button
+              class="col-name sort-btn"
+              :class="{ active: sortKey === 'name' }"
+              @click="setSort('name')"
+            >
+              Name<span class="sort-arrow">{{ sortIndicator('name') }}</span>
+            </button>
+            <button
+              class="col-size sort-btn"
+              :class="{ active: sortKey === 'size' }"
+              @click="setSort('size')"
+            >
+              Size<span class="sort-arrow">{{ sortIndicator('size') }}</span>
+            </button>
+            <button
+              class="col-perm sort-btn"
+              :class="{ active: sortKey === 'permissions' }"
+              @click="setSort('permissions')"
+            >
+              Permissions<span class="sort-arrow">{{ sortIndicator('permissions') }}</span>
+            </button>
+            <button
+              class="col-date sort-btn"
+              :class="{ active: sortKey === 'modified' }"
+              @click="setSort('modified')"
+            >
+              Modified<span class="sort-arrow">{{ sortIndicator('modified') }}</span>
+            </button>
           </div>
           <div
-            v-for="entry in listEntries"
+            v-for="entry in visibleListEntries"
             :key="entry.path"
             class="file-row"
             :class="{
@@ -1180,7 +1350,9 @@ watch(viewMode, () => {
             <span class="col-perm">{{ entry.permissions || '-' }}</span>
             <span class="col-date">{{ formatDate(entry.modified) }}</span>
           </div>
-          <div v-if="listEntries.length === 0" class="col-empty">Empty directory</div>
+          <div v-if="visibleListEntries.length === 0" class="col-empty">
+            {{ listEntries.length > 0 ? 'No files match the filter' : 'Empty directory' }}
+          </div>
         </template>
       </div>
 
@@ -1422,6 +1594,29 @@ watch(viewMode, () => {
   flex-shrink: 0;
 }
 
+.filter-box {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+
+.filter-input {
+  width: 150px;
+  background: #11111b;
+  border: 1px solid #4f6ec2;
+  border-radius: 5px;
+  color: #cdd6f4;
+  font-size: 12px;
+  padding: 3px 8px;
+  outline: none;
+}
+
+.filter-input::placeholder {
+  color: #6c7086;
+}
+
 .toggle-btn {
   background: none;
   border: none;
@@ -1595,6 +1790,36 @@ watch(viewMode, () => {
   top: 0;
   z-index: 1;
   border-bottom: 1px solid #2a2a3d;
+  user-select: none;
+}
+
+.file-header .sort-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  text-align: left;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.file-header .sort-btn:hover {
+  color: #cdd6f4;
+}
+
+.file-header .sort-btn.active {
+  color: #89b4fa;
+}
+
+.sort-arrow {
+  font-size: 9px;
+  line-height: 1;
 }
 
 .file-row {
