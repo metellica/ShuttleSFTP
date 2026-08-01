@@ -6,6 +6,8 @@ import { useTabsStore } from '@/stores/tabs'
 import { useTransferStore } from '@/stores/transfer'
 import { useClipboardStore } from '@/stores/clipboard'
 import { usePrepareStore } from '@/stores/prepare'
+import { useViewSettingsStore } from '@/stores/viewSettings'
+import DensityControl from '@/components/layout/DensityControl.vue'
 import { listDir, mkDir, uploadFiles, downloadFiles, downloadFileAs, previewFile, saveFileContent, saveBookmark, removeEntry, transferRemote } from '@/composables/useTauri'
 import { promptText } from '@/composables/usePrompt'
 import type { FileEntry, FilePreview } from '@/types/filesystem'
@@ -24,6 +26,7 @@ const tabsStore = useTabsStore()
 const transferStore = useTransferStore()
 const clipboard = useClipboardStore()
 const prepareStore = usePrepareStore()
+const viewSettings = useViewSettingsStore()
 const columns = ref<Column[]>([])
 const dragOver = ref(false)
 const selectedPaths = ref<Set<string>>(new Set())
@@ -1072,13 +1075,44 @@ function onFilterKeydown(e: KeyboardEvent) {
   }
 }
 
+/** Ctrl+wheel zooms the file rows instead of scrolling, as in browsers. */
+function onZoomWheel(e: WheelEvent) {
+  if (!e.ctrlKey && !e.metaKey) return
+  // The preview pane keeps native scrolling/zooming.
+  if ((e.target as HTMLElement | null)?.closest('.preview-col')) return
+  e.preventDefault()
+  viewSettings.nudge(e.deltaY < 0 ? 1 : -1)
+}
+
+/** Row zoom, using the keys browsers already train users on. */
+function onZoomKeydown(e: KeyboardEvent) {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return
+  // The terminal and the in-place editor own their own key handling.
+  const t = e.target as HTMLElement | null
+  if (t && (t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+  if (e.key === '=' || e.key === '+') {
+    e.preventDefault()
+    viewSettings.nudge(1)
+  } else if (e.key === '-') {
+    e.preventDefault()
+    viewSettings.nudge(-1)
+  } else if (e.key === '0') {
+    e.preventDefault()
+    viewSettings.reset()
+  }
+}
+
 onMounted(async () => {
   window.addEventListener('click', hideCtxMenu)
   window.addEventListener('resize', scheduleRecompute)
   window.addEventListener('keydown', onNavKeydown)
   window.addEventListener('keydown', onClipboardKeydown)
   window.addEventListener('keydown', onFilterKeydown)
+  window.addEventListener('keydown', onZoomKeydown)
   window.addEventListener('mouseup', onNavMouseUp)
+  // Registered by hand: a passive listener could not call preventDefault,
+  // and the browser would zoom the whole page instead.
+  bodyEl.value?.addEventListener('wheel', onZoomWheel, { passive: false })
   unlistenDragDrop = await getCurrentWebview().onDragDropEvent(async (event) => {
     if (event.payload.type === 'enter' || event.payload.type === 'over') {
       dragOver.value = true
@@ -1107,7 +1141,9 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onNavKeydown)
   window.removeEventListener('keydown', onClipboardKeydown)
   window.removeEventListener('keydown', onFilterKeydown)
+  window.removeEventListener('keydown', onZoomKeydown)
   window.removeEventListener('mouseup', onNavMouseUp)
+  bodyEl.value?.removeEventListener('wheel', onZoomWheel)
   unlistenDragDrop?.()
 })
 
@@ -1236,9 +1272,10 @@ watch(viewMode, () => {
           ☰
         </button>
       </div>
+      <DensityControl />
     </div>
 
-    <div class="body" ref="bodyEl">
+    <div class="body" ref="bodyEl" :style="{ '--row-scale': viewSettings.rowScale }">
       <!-- Finder-style Miller columns -->
       <div
         v-if="viewMode === 'columns'"
@@ -1659,7 +1696,13 @@ watch(viewMode, () => {
   color: #6c7086;
 }
 
+/*
+ * File-row metrics below derive from --row-scale so the listing can be
+ * tuned for eyesight or display DPI. Column widths scale too, otherwise
+ * the larger text clips at the bigger settings.
+ */
 .body {
+  --row-scale: 1;
   flex: 1;
   display: flex;
   overflow-x: auto;
@@ -1674,8 +1717,8 @@ watch(viewMode, () => {
 }
 
 .column {
-  min-width: 230px;
-  max-width: 280px;
+  min-width: calc(230px * var(--row-scale));
+  max-width: calc(280px * var(--row-scale));
   height: 100%;
   overflow-y: auto;
   overflow-x: hidden;
@@ -1688,9 +1731,9 @@ watch(viewMode, () => {
 .entry {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 5px 12px;
-  font-size: 13px;
+  gap: calc(7px * var(--row-scale));
+  padding: calc(5px * var(--row-scale)) calc(12px * var(--row-scale));
+  font-size: calc(13px * var(--row-scale));
   cursor: pointer;
   border-radius: 5px;
   margin: 1px 6px;
@@ -1732,7 +1775,7 @@ watch(viewMode, () => {
 }
 
 .entry-icon {
-  font-size: 14px;
+  font-size: calc(14px * var(--row-scale));
   flex-shrink: 0;
 }
 
@@ -1745,13 +1788,13 @@ watch(viewMode, () => {
 
 .entry-size {
   color: #6c7086;
-  font-size: 11px;
+  font-size: calc(11px * var(--row-scale));
   flex-shrink: 0;
 }
 
 .entry-arrow {
   color: #6c7086;
-  font-size: 12px;
+  font-size: calc(12px * var(--row-scale));
   flex-shrink: 0;
 }
 
@@ -1760,9 +1803,9 @@ watch(viewMode, () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 60px;
+  height: calc(60px * var(--row-scale));
   color: #6c7086;
-  font-size: 12px;
+  font-size: calc(12px * var(--row-scale));
 }
 
 /* Explorer-style details list */
@@ -1775,16 +1818,18 @@ watch(viewMode, () => {
 .file-header,
 .file-row {
   display: grid;
-  grid-template-columns: 1fr 90px 110px 170px;
-  padding: 6px 14px;
-  font-size: 13px;
+  grid-template-columns:
+    1fr calc(90px * var(--row-scale)) calc(110px * var(--row-scale))
+    calc(170px * var(--row-scale));
+  padding: calc(6px * var(--row-scale)) calc(14px * var(--row-scale));
+  font-size: calc(13px * var(--row-scale));
   align-items: center;
 }
 
 .file-header {
   background: #181825;
   color: #6c7086;
-  font-size: 12px;
+  font-size: calc(12px * var(--row-scale));
   font-weight: 600;
   position: sticky;
   top: 0;
@@ -1818,7 +1863,7 @@ watch(viewMode, () => {
 }
 
 .sort-arrow {
-  font-size: 9px;
+  font-size: calc(9px * var(--row-scale));
   line-height: 1;
 }
 
@@ -1847,7 +1892,7 @@ watch(viewMode, () => {
 .col-name {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: calc(7px * var(--row-scale));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1857,7 +1902,7 @@ watch(viewMode, () => {
 .col-perm,
 .col-date {
   color: #6c7086;
-  font-size: 12px;
+  font-size: calc(12px * var(--row-scale));
 }
 
 .col-perm {

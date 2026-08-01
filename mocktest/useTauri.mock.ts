@@ -125,3 +125,15 @@ export const deleteBookmark = async () => {}
 // Container / pod / cross-session additions
 export const connectLocal = async () => 'mock-local-session'
 export const transferRemote = async () => []
+
+// Newer backend APIs the harness does not exercise, stubbed so imports resolve
+export const cancelPrepare = async () => {}
+export const pauseTransferGroup = async () => []
+export const resumeTransferGroup = async () => []
+export const listImportedSshHosts = async () => []
+export const setImportedSshHosts = async () => {}
+export const terminalReserve = async () => 'mock-terminal'
+export const terminalOpen = async () => {}
+export const terminalInput = async () => {}
+export const terminalResize = async () => {}
+export const terminalClose = async () => {}

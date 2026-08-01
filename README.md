@@ -17,6 +17,7 @@ A fast, lightweight, cross-platform SFTP/SCP GUI built with **Tauri 2 + Vue 3 + 
 - 🧭 **Editable Path Bar** — Copy the current path, paste & go, or click to type a path directly
 - 🗒️ **Details View** — Windows Explorer-style list view (size, permissions, modified time), toggleable
 - ✅ **Multi-Select** — Ctrl+click to toggle entries, Shift+click for range selection
+- 🔍 **Adjustable Row Size** — Small / Medium / Large presets plus stepless zoom from 75 % to 250 % via Ctrl+wheel, `Ctrl+=` / `Ctrl+-` / `Ctrl+0` or the slider; row height, text, icons and column widths all scale together and the setting is remembered
 - 👁️ **File Preview** — Inline text preview pane with gray line numbers, soft wrap, copy support, and maximize/restore
 - ✏️ **Remote Quick-Edit** — Edit text files in place (paste/undo, Ctrl+S) and save straight back to the server
 - 🖱️ **Drag & Drop Upload** — Drag files or folders from your OS file manager to upload
@@ -130,6 +131,7 @@ ShuttleSFTP/
 12. **Bookmark**: Right-click a remote folder → **⭐ Add Bookmark** (alias defaults to the path; container/pod paths work too). Click **⭐ Bookmarks** in the toolbar: bookmarks are grouped by server (`user@alias`, or `user@ip:port` when no alias) — click a server row to expand its paths, then connect or delete
 13. **Transfers**: The queue at the bottom shows per-file and folder-level progress with live speed. Use ⏸ / ▶ / ✕ on each row (or the header buttons for all), ℹ for details (from/to/size/server), and 📂 to reveal the local file. Interrupted transfers reappear as paused after a restart — ▶ resumes from the last byte, reconnecting automatically when credentials are saved
 14. **Terminal**: Click **🖥 Terminal** to open a shell in the current directory — a local PTY for "This Machine" sessions, an SSH shell for remote hosts, and an automatic `exec` attach when you're inside `/@containers/...` or `/@pods/...`. Each browser tab keeps its own terminals: use **+** in the drawer to open more, click a chip to switch, ✕ to close, and drag the drawer's top edge to resize
+15. **Row size**: Ctrl+wheel over the file listing (or `Ctrl+=` / `Ctrl+-`, `Ctrl+0` to reset) zooms rows between 75 % and 250 %. The **Aa** button at the right of the path bar offers Small / Medium / Large presets and a stepless slider; the setting is remembered
 
 ### Container & pod access notes
 
