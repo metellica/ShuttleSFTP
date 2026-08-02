@@ -8,6 +8,7 @@ import {
 } from '@/composables/useTauri'
 import { promptText } from '@/composables/usePrompt'
 import type { Bookmark, ConnectParams, ConnectedMeta } from '@/types/connection'
+import { LOCAL_TAB_LABEL } from '@/types/connection'
 
 const emit = defineEmits<{
   close: []
@@ -99,7 +100,7 @@ async function connect(bm: Bookmark) {
   try {
     if (isLocal) {
       const sessionId = await connectLocal()
-      emit('connected', sessionId, '💻 This Machine', bm.path, {
+      emit('connected', sessionId, LOCAL_TAB_LABEL, bm.path, {
         kind: 'local',
         params: null,
       })

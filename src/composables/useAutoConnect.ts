@@ -1,6 +1,7 @@
 import { sshConnect, connectLocal, listProfiles, listBookmarks } from '@/composables/useTauri'
 import { useTabsStore } from '@/stores/tabs'
 import type { ConnectParams } from '@/types/connection'
+import { LOCAL_TAB_LABEL } from '@/types/connection'
 import type { TransferTask } from '@/types/transfer'
 
 interface SavedCredentials {
@@ -87,7 +88,7 @@ async function ensureSessionFor(
   if (host === 'local') {
     try {
       const sessionId = await connectLocal()
-      openTabFor(sessionId, 'Local', initialDir, null, 'local')
+      openTabFor(sessionId, LOCAL_TAB_LABEL, initialDir, null, 'local')
       return sessionId
     } catch (e) {
       console.error('Cannot open local session:', e)

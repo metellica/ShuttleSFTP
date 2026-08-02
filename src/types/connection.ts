@@ -45,6 +45,12 @@ export interface SshHostEntry {
 
 export type SessionKind = 'ssh' | 'local'
 
+/**
+ * Tab label for a local session. Text only: the tab bar draws the kind
+ * icon itself, so an emoji here would show up twice.
+ */
+export const LOCAL_TAB_LABEL = 'This Machine'
+
 /** Everything App needs to record about a fresh connection. */
 export interface ConnectedMeta {
   kind: SessionKind

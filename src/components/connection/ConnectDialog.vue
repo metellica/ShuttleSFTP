@@ -16,6 +16,7 @@ import type {
   ConnectedMeta,
   SessionKind,
 } from '@/types/connection'
+import { LOCAL_TAB_LABEL } from '@/types/connection'
 
 const emit = defineEmits<{
   close: []
@@ -336,7 +337,7 @@ async function doConnect() {
   try {
     if (mode.value === 'local') {
       const sessionId = await connectLocal()
-      emit('connected', sessionId, '💻 This Machine', { kind: 'local', params: null })
+      emit('connected', sessionId, LOCAL_TAB_LABEL, { kind: 'local', params: null })
       return
     }
     if (saveNode.value && !fromSshConfig.value) {
