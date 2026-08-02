@@ -132,9 +132,13 @@ async function onTabDrop(tab: Tab, event: DragEvent) {
   max-width: 200px;
 }
 
+/* The accent bar is what makes the current tab findable at a glance:
+   the background alone is a shade apart from the bar's, which is easy
+   to lose on a row of connected sessions. Matches ShuttleFiles. */
 .tab.active {
   background: #1e1e2e;
   color: #cdd6f4;
+  box-shadow: inset 0 2px 0 #89b4fa;
 }
 
 .tab.drop-target {
