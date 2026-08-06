@@ -1,4 +1,8 @@
 import { invoke } from '@tauri-apps/api/core'
+import {
+  readText as clipboardPluginReadText,
+  writeText as clipboardPluginWriteText,
+} from '@tauri-apps/plugin-clipboard-manager'
 import type {
   ConnectParams,
   SshHostEntry,
@@ -149,6 +153,21 @@ export const terminalResize = (
 
 export const terminalClose = (terminalId: string, terminalToken: string) =>
   invoke<void>('terminal_close', { terminalId, terminalToken })
+
+// --- System clipboard (text) -------------------------------------------------
+// The WebView's own clipboard API needs a user gesture and a permission
+// prompt to read, so the terminal goes through the plugin instead.
+
+export const clipboardWriteText = (text: string) => clipboardPluginWriteText(text)
+
+/** Empty string when the clipboard holds no text (an image, files, …). */
+export const clipboardReadText = async (): Promise<string> => {
+  try {
+    return (await clipboardPluginReadText()) ?? ''
+  } catch {
+    return ''
+  }
+}
 
 // Config
 export const loadSshConfig = () =>

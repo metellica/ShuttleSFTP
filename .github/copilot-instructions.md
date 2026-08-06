@@ -52,6 +52,6 @@ Frontend types in `src/types/` must stay in sync with Rust structs in `src-tauri
 - **State management**: Shared Rust state is managed via Tauri's `State<>` injection (`SessionManager`, `TransferEngine`). Sessions are identified by UUID strings.
 - **Frontend stores**: Use Pinia Composition API style (setup function, not options API).
 - **Path alias**: `@` resolves to `src/` in frontend imports.
-- **Tauri plugins**: `tauri-plugin-dialog` (native file pickers) and `tauri-plugin-fs` (local FS access) are enabled.
+- **Tauri plugins**: `tauri-plugin-dialog` (native file pickers), `tauri-plugin-fs` (local FS access) and `tauri-plugin-clipboard-manager` (terminal copy/paste) are enabled.
 - **Capabilities (Tauri 2 ACL)**: Plugin commands and events require permissions declared in `src-tauri/capabilities/default.json`. Without matching permissions, plugin calls fail silently at runtime (no compile error). Custom `#[tauri::command]` handlers do not need capability entries.
 - **Async runtime**: The backend uses Tokio with `features = ["full"]`. All SSH/SFTP operations are async.

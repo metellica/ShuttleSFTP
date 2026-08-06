@@ -5,6 +5,8 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import {
+  clipboardReadText,
+  clipboardWriteText,
   terminalReserve,
   terminalOpen,
   terminalInput,
@@ -31,6 +33,7 @@ let terminalId: string | null = null
 let terminalToken: string | null = null
 let resizeObserver: ResizeObserver | null = null
 let disposed = false
+let selectionCopyTimer: ReturnType<typeof setTimeout> | null = null
 const unlisteners: UnlistenFn[] = []
 
 function b64encode(data: string): string {
@@ -71,6 +74,26 @@ function stopListening() {
   unlisteners.length = 0
 }
 
+function writeSelection(text: string) {
+  if (!text) return
+  clipboardWriteText(text).catch((e) => console.error('Cannot copy terminal selection', e))
+}
+
+async function pasteClipboard() {
+  if (!term || exited.value) return
+  const text = await clipboardReadText()
+  if (text) term.paste(text)
+}
+
+/** Right-click pastes, the way a console host does; no context menu. */
+function onMouseDown(event: MouseEvent) {
+  if (event.button !== 2) return
+  event.preventDefault()
+  event.stopPropagation()
+  term?.focus()
+  pasteClipboard().catch((e) => console.error('Cannot paste terminal clipboard', e))
+}
+
 onMounted(async () => {
   if (!termEl.value) return
   term = new Terminal({
@@ -88,6 +111,14 @@ onMounted(async () => {
   term.loadAddon(fit)
   term.open(termEl.value)
   fit.fit()
+  // Selecting with the mouse copies, after a pause so a drag in progress
+  // does not hammer the clipboard on every intermediate selection.
+  term.onSelectionChange(() => {
+    const selection = term?.getSelection() ?? ''
+    if (!selection) return
+    if (selectionCopyTimer) clearTimeout(selectionCopyTimer)
+    selectionCopyTimer = setTimeout(() => writeSelection(selection), 120)
+  })
 
   // The id is ours, so listeners can filter by it before the shell exists:
   // initial output and immediate exits are caught without buffering, and
@@ -168,6 +199,7 @@ watch(
 
 onBeforeUnmount(() => {
   disposed = true
+  if (selectionCopyTimer) clearTimeout(selectionCopyTimer)
   resizeObserver?.disconnect()
   stopListening()
   if (terminalId && terminalToken) terminalClose(terminalId, terminalToken).catch(() => {})
@@ -178,7 +210,13 @@ onBeforeUnmount(() => {
 <template>
   <div class="term-view" v-show="visible">
     <div v-if="error" class="term-error">{{ error }}</div>
-    <div v-else ref="termEl" class="term-host" />
+    <div
+      v-else
+      ref="termEl"
+      class="term-host"
+      @mousedown.capture="onMouseDown"
+      @contextmenu.prevent.stop
+    />
   </div>
 </template>
 

@@ -17,6 +17,8 @@
     "dialog:allow-ask",
     "dialog:allow-confirm",
     "fs:read-all",
-    "fs:write-all"
+    "fs:write-all",
+    "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-write-text"
   ]
 }

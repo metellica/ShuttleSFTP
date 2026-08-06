@@ -137,3 +137,10 @@ export const terminalOpen = async () => {}
 export const terminalInput = async () => {}
 export const terminalResize = async () => {}
 export const terminalClose = async () => {}
+
+// In-memory clipboard, so terminal copy/paste works in the harness too.
+let mockClipboardText = ''
+export const clipboardWriteText = async (text: string) => {
+  mockClipboardText = text
+}
+export const clipboardReadText = async () => mockClipboardText
