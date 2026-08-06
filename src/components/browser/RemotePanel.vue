@@ -6,7 +6,7 @@ import { useTabsStore } from '@/stores/tabs'
 import { useTransferStore } from '@/stores/transfer'
 import { useClipboardStore } from '@/stores/clipboard'
 import { usePrepareStore } from '@/stores/prepare'
-import { useViewSettingsStore } from '@/stores/viewSettings'
+import { useViewSettingsStore, COLUMN_KEYS, type ColumnKey } from '@/stores/viewSettings'
 import DensityControl from '@/components/layout/DensityControl.vue'
 import { listDir, mkDir, uploadFiles, downloadFiles, downloadFileAs, previewFile, saveFileContent, saveBookmark, removeEntry, transferRemote } from '@/composables/useTauri'
 import { promptText } from '@/composables/usePrompt'
@@ -73,6 +73,76 @@ function sortIndicator(key: SortKey): string {
   if (sortKey.value !== key) return ''
   return sortAsc.value ? '▲' : '▼'
 }
+
+// --- Column widths -------------------------------------------------------
+/** Horizontal padding of a list row, which counts towards its total width. */
+const ROW_PADDING = 14
+
+/**
+ * Widths are stored unscaled and multiplied by the row scale here, so
+ * zooming the rows keeps the columns in proportion.
+ */
+const scaledWidths = computed(
+  () =>
+    Object.fromEntries(
+      COLUMN_KEYS.map((key) => [key, viewSettings.columnWidths[key] * viewSettings.rowScale])
+    ) as Record<ColumnKey, number>
+)
+
+/**
+ * The name column fills the pane until it is dragged; after that it keeps
+ * its width and the trailing filler track takes the slack instead.
+ */
+const gridTemplate = computed(() => {
+  const w = scaledWidths.value
+  const name = viewSettings.stretchName ? `minmax(${w.name}px, 1fr)` : `${w.name}px`
+  const filler = viewSettings.stretchName ? '0px' : '1fr'
+  return `${name} ${w.size}px ${w.permissions}px ${w.modified}px ${filler}`
+})
+
+/** Once the columns outgrow the pane the list scrolls sideways. */
+const rowWidth = computed(() => {
+  const w = scaledWidths.value
+  const tracks = COLUMN_KEYS.reduce((sum, key) => sum + w[key], 0)
+  return tracks + 2 * ROW_PADDING * viewSettings.rowScale
+})
+
+const resizing = ref<ColumnKey | null>(null)
+const headNameEl = ref<HTMLElement | null>(null)
+
+/** Header and rows share the track sizes, so they always line up. */
+const rowStyle = computed(() => ({
+  gridTemplateColumns: gridTemplate.value,
+  width: `max(100%, ${rowWidth.value}px)`,
+}))
+
+/** Drag a header divider; the width it writes is what the next start restores. */
+function startColumnResize(key: ColumnKey, event: MouseEvent) {
+  const startX = event.clientX
+  // Undo the row scale so a pixel of pointer travel is a pixel on screen.
+  const scale = viewSettings.rowScale || 1
+  // A stretched name column is wider than its stored width, so the drag has
+  // to start from what is actually on screen or the first pixels do nothing.
+  const startWidth =
+    key === 'name' && headNameEl.value
+      ? headNameEl.value.getBoundingClientRect().width / scale
+      : viewSettings.columnWidths[key]
+  resizing.value = key
+
+  const move = (e: MouseEvent) =>
+    viewSettings.setColumnWidth(key, startWidth + (e.clientX - startX) / scale)
+  const stop = () => {
+    window.removeEventListener('mousemove', move)
+    window.removeEventListener('mouseup', stop)
+    document.body.classList.remove('col-resizing')
+    resizing.value = null
+  }
+  window.addEventListener('mousemove', move)
+  window.addEventListener('mouseup', stop)
+  document.body.classList.add('col-resizing')
+}
+
+onUnmounted(() => document.body.classList.remove('col-resizing'))
 
 /** Re-sort already loaded entries in place, without hitting the server again. */
 function resortLoaded() {
@@ -1332,40 +1402,77 @@ watch(viewMode, () => {
       >
         <div v-if="listLoading" class="col-loading">Loading...</div>
         <template v-else>
-          <div class="file-header">
-            <button
-              class="col-name sort-btn"
-              :class="{ active: sortKey === 'name' }"
-              @click="setSort('name')"
-            >
-              Name<span class="sort-arrow">{{ sortIndicator('name') }}</span>
-            </button>
-            <button
-              class="col-size sort-btn"
-              :class="{ active: sortKey === 'size' }"
-              @click="setSort('size')"
-            >
-              Size<span class="sort-arrow">{{ sortIndicator('size') }}</span>
-            </button>
-            <button
-              class="col-perm sort-btn"
-              :class="{ active: sortKey === 'permissions' }"
-              @click="setSort('permissions')"
-            >
-              Permissions<span class="sort-arrow">{{ sortIndicator('permissions') }}</span>
-            </button>
-            <button
-              class="col-date sort-btn"
-              :class="{ active: sortKey === 'modified' }"
-              @click="setSort('modified')"
-            >
-              Modified<span class="sort-arrow">{{ sortIndicator('modified') }}</span>
-            </button>
+          <div class="file-header" :style="rowStyle">
+            <div ref="headNameEl" class="head-cell col-name">
+              <button
+                class="sort-btn"
+                :class="{ active: sortKey === 'name' }"
+                @click="setSort('name')"
+              >
+                Name<span class="sort-arrow">{{ sortIndicator('name') }}</span>
+              </button>
+              <span
+                class="grip"
+                :class="{ active: resizing === 'name' }"
+                title="Drag to resize, double-click to reset"
+                @mousedown.prevent.stop="startColumnResize('name', $event)"
+                @dblclick.stop="viewSettings.resetColumnWidth('name')"
+              />
+            </div>
+            <div class="head-cell col-size">
+              <button
+                class="sort-btn"
+                :class="{ active: sortKey === 'size' }"
+                @click="setSort('size')"
+              >
+                Size<span class="sort-arrow">{{ sortIndicator('size') }}</span>
+              </button>
+              <span
+                class="grip"
+                :class="{ active: resizing === 'size' }"
+                title="Drag to resize, double-click to reset"
+                @mousedown.prevent.stop="startColumnResize('size', $event)"
+                @dblclick.stop="viewSettings.resetColumnWidth('size')"
+              />
+            </div>
+            <div class="head-cell col-perm">
+              <button
+                class="sort-btn"
+                :class="{ active: sortKey === 'permissions' }"
+                @click="setSort('permissions')"
+              >
+                Permissions<span class="sort-arrow">{{ sortIndicator('permissions') }}</span>
+              </button>
+              <span
+                class="grip"
+                :class="{ active: resizing === 'permissions' }"
+                title="Drag to resize, double-click to reset"
+                @mousedown.prevent.stop="startColumnResize('permissions', $event)"
+                @dblclick.stop="viewSettings.resetColumnWidth('permissions')"
+              />
+            </div>
+            <div class="head-cell col-date">
+              <button
+                class="sort-btn"
+                :class="{ active: sortKey === 'modified' }"
+                @click="setSort('modified')"
+              >
+                Modified<span class="sort-arrow">{{ sortIndicator('modified') }}</span>
+              </button>
+              <span
+                class="grip"
+                :class="{ active: resizing === 'modified' }"
+                title="Drag to resize, double-click to reset"
+                @mousedown.prevent.stop="startColumnResize('modified', $event)"
+                @dblclick.stop="viewSettings.resetColumnWidth('modified')"
+              />
+            </div>
           </div>
           <div
             v-for="entry in visibleListEntries"
             :key="entry.path"
             class="file-row"
+            :style="rowStyle"
             :class="{
               selected: selectedPaths.has(entry.path),
               'drop-target': dropTargetPath === entry.path,
@@ -1811,19 +1918,19 @@ watch(viewMode, () => {
 /* Explorer-style details list */
 .list-view {
   flex: 1;
-  overflow-y: auto;
+  min-width: 0;
+  overflow: auto;
   background: #1e1e2e;
 }
 
 .file-header,
 .file-row {
   display: grid;
-  grid-template-columns:
-    1fr calc(90px * var(--row-scale)) calc(110px * var(--row-scale))
-    calc(170px * var(--row-scale));
+  /* Track sizes come from the store so the dividers can be dragged. */
   padding: calc(6px * var(--row-scale)) calc(14px * var(--row-scale));
   font-size: calc(13px * var(--row-scale));
   align-items: center;
+  box-sizing: border-box;
 }
 
 .file-header {
@@ -1839,6 +1946,8 @@ watch(viewMode, () => {
 }
 
 .file-header .sort-btn {
+  flex: 1;
+  min-width: 0;
   background: none;
   border: none;
   padding: 0;
@@ -1852,6 +1961,48 @@ watch(viewMode, () => {
   text-align: left;
   overflow: hidden;
   white-space: nowrap;
+}
+
+.head-cell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+/*
+ * The name cell clips its text with overflow:hidden, which would swallow the
+ * grip that hangs over the column edge. Only the sort button needs clipping.
+ */
+.file-header .head-cell {
+  overflow: visible;
+}
+
+/* Kept inside the cell so the last column's handle cannot fall off the pane. */
+.grip {
+  position: absolute;
+  top: calc(-6px * var(--row-scale));
+  right: 0;
+  width: 10px;
+  height: calc(100% + 12px * var(--row-scale));
+  cursor: col-resize;
+  z-index: 2;
+}
+
+.grip::after {
+  content: '';
+  position: absolute;
+  top: 15%;
+  right: 0;
+  width: 1px;
+  height: 70%;
+  background: #2a2a3d;
+}
+
+.grip:hover::after,
+.grip.active::after {
+  background: #89b4fa;
+  width: 2px;
 }
 
 .file-header .sort-btn:hover {

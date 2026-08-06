@@ -24,29 +24,100 @@ export const ROW_PRESETS: RowPreset[] = [
   { id: 'large', label: 'Large', scale: 1.4 },
 ]
 
+/** Width of every details-list column, in unscaled pixels. */
+export interface ColumnWidths {
+  name: number
+  size: number
+  permissions: number
+  modified: number
+}
+
+/**
+ * Column widths are stored unscaled: the listing multiplies them by the
+ * row scale, so a dragged width keeps its proportions when the rows zoom.
+ */
+export const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
+  name: 280,
+  size: 90,
+  permissions: 110,
+  modified: 170,
+}
+
+export type ColumnKey = keyof ColumnWidths
+
+export const COLUMN_KEYS = Object.keys(DEFAULT_COLUMN_WIDTHS) as ColumnKey[]
+
+/** Narrow enough to be useful, wide enough that the header stays grabbable. */
+export const MIN_COLUMN_WIDTH = 56
+export const MAX_COLUMN_WIDTH = 1200
+
 const STORAGE_KEY = 'shuttle-sftp:view'
 
 function clamp(value: number): number {
   return Math.min(MAX_ROW_SCALE, Math.max(MIN_ROW_SCALE, value))
 }
 
-function load(): number {
+function clampWidth(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback
+  return Math.round(Math.min(MAX_COLUMN_WIDTH, Math.max(MIN_COLUMN_WIDTH, value)))
+}
+
+interface StoredView {
+  rowScale: number
+  columnWidths: ColumnWidths
+  stretchName: boolean
+}
+
+/** A setting missing from an older payload falls back to its default. */
+function load(): StoredView {
+  const fallback: StoredView = {
+    rowScale: 1,
+    columnWidths: { ...DEFAULT_COLUMN_WIDTHS },
+    stretchName: true,
+  }
   const raw = localStorage.getItem(STORAGE_KEY)
-  if (!raw) return 1
+  if (!raw) return fallback
   try {
-    const parsed = JSON.parse(raw) as { rowScale?: unknown }
-    return typeof parsed.rowScale === 'number' ? clamp(parsed.rowScale) : 1
+    const parsed = JSON.parse(raw) as {
+      rowScale?: unknown
+      columnWidths?: Partial<ColumnWidths>
+      stretchName?: unknown
+    }
+    if (typeof parsed.rowScale === 'number') fallback.rowScale = clamp(parsed.rowScale)
+    for (const key of COLUMN_KEYS) {
+      fallback.columnWidths[key] = clampWidth(
+        Number(parsed.columnWidths?.[key]),
+        DEFAULT_COLUMN_WIDTHS[key]
+      )
+    }
+    if (typeof parsed.stretchName === 'boolean') fallback.stretchName = parsed.stretchName
+    return fallback
   } catch {
-    return 1
+    return fallback
   }
 }
 
 export const useViewSettingsStore = defineStore('viewSettings', () => {
-  const rowScale = ref(load())
+  const stored = load()
+  const rowScale = ref(stored.rowScale)
+  const columnWidths = ref<ColumnWidths>(stored.columnWidths)
+  // Until a divider is dragged the name column fills whatever is left, which
+  // is the layout most people expect from a fresh window.
+  const stretchName = ref(stored.stretchName)
 
-  watch(rowScale, (value) => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ rowScale: value }))
-  })
+  function save() {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        rowScale: rowScale.value,
+        columnWidths: { ...columnWidths.value },
+        stretchName: stretchName.value,
+      })
+    )
+  }
+
+  watch([rowScale, stretchName], save)
+  watch(columnWidths, save, { deep: true })
 
   /** The preset the current scale corresponds to, if any. */
   const activePreset = computed(
@@ -76,12 +147,35 @@ export const useViewSettingsStore = defineStore('viewSettings', () => {
     rowScale.value = 1
   }
 
+  /** Dragged header divider, in unscaled pixels. */
+  function setColumnWidth(key: ColumnKey, value: number) {
+    // A name column that has been given a width of its own can no longer
+    // stretch, or dragging it narrower would be undone by the fill.
+    if (key === 'name') stretchName.value = false
+    columnWidths.value[key] = clampWidth(value, DEFAULT_COLUMN_WIDTHS[key])
+  }
+
+  function resetColumnWidth(key: ColumnKey) {
+    columnWidths.value[key] = DEFAULT_COLUMN_WIDTHS[key]
+    if (key === 'name') stretchName.value = true
+  }
+
+  function resetColumnWidths() {
+    columnWidths.value = { ...DEFAULT_COLUMN_WIDTHS }
+    stretchName.value = true
+  }
+
   return {
     rowScale,
+    columnWidths,
+    stretchName,
     activePreset,
     percent,
     setScale,
     setPreset,
+    setColumnWidth,
+    resetColumnWidth,
+    resetColumnWidths,
     nudge,
     reset,
   }

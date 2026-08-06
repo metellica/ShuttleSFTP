@@ -353,6 +353,12 @@ body {
 ::-webkit-scrollbar-corner {
   background: transparent;
 }
+
+/* The pointer must not become a text cursor halfway through a column drag. */
+body.col-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
 </style>
 
 <style scoped>
