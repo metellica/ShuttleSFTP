@@ -88,15 +88,15 @@ if (!document.getElementById(STYLE_ID)) {
 .sp-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--overlay);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1000;
 }
 .sp-dialog {
-  background: #1e1e2e;
-  border: 1px solid #45475a;
+  background: var(--bg-primary);
+  border: 1px solid var(--text-disabled);
   border-radius: 8px;
   padding: 20px;
   width: 380px;
@@ -105,22 +105,22 @@ if (!document.getElementById(STYLE_ID)) {
   gap: 14px;
 }
 .sp-title {
-  color: #cdd6f4;
+  color: var(--text-primary);
   font-size: 14px;
   font-weight: 600;
   word-break: break-all;
 }
 .sp-input {
-  background: #313244;
-  border: 1px solid #45475a;
+  background: var(--surface);
+  border: 1px solid var(--text-disabled);
   border-radius: 4px;
   padding: 7px 10px;
-  color: #cdd6f4;
+  color: var(--text-primary);
   font-size: 13px;
   outline: none;
 }
 .sp-input:focus {
-  border-color: #89b4fa;
+  border-color: var(--accent);
 }
 .sp-actions {
   display: flex;
@@ -132,19 +132,19 @@ if (!document.getElementById(STYLE_ID)) {
   border-radius: 4px;
   font-size: 12px;
   cursor: pointer;
-  border: 1px solid #45475a;
+  border: 1px solid var(--text-disabled);
 }
 .sp-cancel {
-  background: #313244;
-  color: #cdd6f4;
+  background: var(--surface);
+  color: var(--text-primary);
 }
 .sp-ok {
-  background: #89b4fa;
-  color: #1e1e2e;
-  border-color: #89b4fa;
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
 }
 .sp-ok:hover {
-  background: #74c7ec;
+  background: var(--accent-hover);
 }
 `
   document.head.appendChild(style)

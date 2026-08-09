@@ -5,6 +5,7 @@ import { useTransferStore } from '@/stores/transfer'
 import { usePrepareStore } from '@/stores/prepare'
 import { transferRemote } from '@/composables/useTauri'
 
+const props = defineProps<{ pane: import('@/stores/tabs').Pane }>()
 const emit = defineEmits<{ 'new-tab': [] }>()
 const tabsStore = useTabsStore()
 const transferStore = useTransferStore()
@@ -79,10 +80,10 @@ async function onTabDrop(tab: Tab, event: DragEvent) {
 <template>
   <div class="tab-bar" @click="hideTabCtxMenu">
     <div
-      v-for="tab in tabsStore.tabs"
+      v-for="tab in props.pane.tabs"
       :key="tab.id"
       class="tab"
-      :class="{ active: tab.id === tabsStore.activeTabId, 'drop-target': tab.id === dragTabId }"
+      :class="{ active: tab.id === props.pane.activeTabId, 'drop-target': tab.id === dragTabId }"
       @click="tabsStore.setActiveTab(tab.id)"
       @contextmenu.prevent="onTabContextMenu(tab, $event)"
       @dragover="onTabDragOver(tab, $event)"
@@ -111,8 +112,8 @@ async function onTabDrop(tab: Tab, event: DragEvent) {
 <style scoped>
 .tab-bar {
   display: flex;
-  background: #181825;
-  border-bottom: 1px solid #313244;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
   height: 36px;
   align-items: stretch;
   overflow-x: auto;
@@ -125,9 +126,9 @@ async function onTabDrop(tab: Tab, event: DragEvent) {
   gap: 6px;
   padding: 0 12px;
   cursor: pointer;
-  border-right: 1px solid #313244;
+  border-right: 1px solid var(--border);
   font-size: 12px;
-  color: #a6adc8;
+  color: var(--text-secondary);
   min-width: 120px;
   max-width: 200px;
 }
@@ -136,37 +137,37 @@ async function onTabDrop(tab: Tab, event: DragEvent) {
    the background alone is a shade apart from the bar's, which is easy
    to lose on a row of connected sessions. Matches ShuttleFiles. */
 .tab.active {
-  background: #1e1e2e;
-  color: #cdd6f4;
-  box-shadow: inset 0 2px 0 #89b4fa;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  box-shadow: inset 0 2px 0 var(--accent);
 }
 
 .tab.drop-target {
-  background: #2c3a5c;
-  outline: 1px dashed #89b4fa;
+  background: var(--bg-selected);
+  outline: 1px dashed var(--accent);
   outline-offset: -2px;
 }
 
 .tab-kind {
-  color: #89b4fa;
+  color: var(--accent);
   font-size: 11px;
   flex-shrink: 0;
 }
 
 .tab:hover {
-  background: #242438;
+  background: var(--bg-hover);
 }
 
 .tab-status {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #6c7086;
+  background: var(--text-muted);
 }
 
-.tab-status.connected { background: #a6e3a1; }
-.tab-status.connecting { background: #f9e2af; }
-.tab-status.error { background: #f38ba8; }
+.tab-status.connected { background: var(--success); }
+.tab-status.connecting { background: var(--warning); }
+.tab-status.error { background: var(--error); }
 
 .tab-label {
   flex: 1;
@@ -178,34 +179,34 @@ async function onTabDrop(tab: Tab, event: DragEvent) {
 .tab-close {
   background: none;
   border: none;
-  color: #6c7086;
+  color: var(--text-muted);
   cursor: pointer;
   font-size: 16px;
   line-height: 1;
   padding: 2px;
 }
 
-.tab-close:hover { color: #f38ba8; }
+.tab-close:hover { color: var(--error); }
 
 .tab-add {
   background: none;
   border: none;
-  color: #a6adc8;
+  color: var(--text-secondary);
   cursor: pointer;
   font-size: 18px;
   padding: 0 12px;
 }
 
-.tab-add:hover { color: #cdd6f4; }
+.tab-add:hover { color: var(--text-primary); }
 
 .ctx-menu {
   position: fixed;
   z-index: 200;
   min-width: 200px;
-  background: #24243a;
-  border: 1px solid #45475a;
+  background: var(--bg-panel);
+  border: 1px solid var(--text-disabled);
   border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 4px 16px var(--shadow-sm);
   padding: 4px;
   display: flex;
   flex-direction: column;
@@ -214,7 +215,7 @@ async function onTabDrop(tab: Tab, event: DragEvent) {
 .ctx-item {
   background: none;
   border: none;
-  color: #cdd6f4;
+  color: var(--text-primary);
   text-align: left;
   padding: 6px 10px;
   font-size: 12px;
@@ -223,6 +224,6 @@ async function onTabDrop(tab: Tab, event: DragEvent) {
 }
 
 .ctx-item:hover {
-  background: #45475a;
+  background: var(--text-disabled);
 }
 </style>

@@ -570,7 +570,7 @@ async function doConnect() {
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -578,8 +578,8 @@ async function doConnect() {
 }
 
 .dialog {
-  background: #1e1e2e;
-  border: 1px solid #45475a;
+  background: var(--bg-primary);
+  border: 1px solid var(--text-disabled);
   border-radius: 8px;
   padding: 20px 24px;
   width: 480px;
@@ -601,13 +601,13 @@ async function doConnect() {
 h2 {
   margin-bottom: 12px;
   font-size: 16px;
-  color: #cdd6f4;
+  color: var(--text-primary);
 }
 
 .mode-switch {
   display: flex;
   margin-bottom: 16px;
-  border: 1px solid #45475a;
+  border: 1px solid var(--text-disabled);
   border-radius: 6px;
   overflow: hidden;
 }
@@ -615,20 +615,20 @@ h2 {
 .mode-btn {
   flex: 1;
   padding: 7px 0;
-  background: #313244;
+  background: var(--surface);
   border: none;
-  color: #a6adc8;
+  color: var(--text-secondary);
   font-size: 13px;
   cursor: pointer;
 }
 
 .mode-btn + .mode-btn {
-  border-left: 1px solid #45475a;
+  border-left: 1px solid var(--text-disabled);
 }
 
 .mode-btn.active {
-  background: #4f6ec2;
-  color: #fff;
+  background: var(--scrollbar-thumb);
+  color: var(--accent-text);
 }
 
 .combo {
@@ -644,7 +644,7 @@ h2 {
 .import-link {
   background: none;
   border: none;
-  color: #89b4fa;
+  color: var(--accent);
   font-size: 11px;
   cursor: pointer;
   padding: 0;
@@ -657,7 +657,7 @@ h2 {
 .import-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--shadow-sm);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -665,8 +665,8 @@ h2 {
 }
 
 .import-panel {
-  background: #1e1e2e;
-  border: 1px solid #45475a;
+  background: var(--bg-primary);
+  border: 1px solid var(--text-disabled);
   border-radius: 8px;
   padding: 20px;
   width: 420px;
@@ -677,22 +677,22 @@ h2 {
 
 .import-panel h3 {
   font-size: 14px;
-  color: #cdd6f4;
+  color: var(--text-primary);
   margin-bottom: 10px;
 }
 
 .import-filter {
   padding: 6px 10px;
-  background: #313244;
-  border: 1px solid #45475a;
+  background: var(--surface);
+  border: 1px solid var(--text-disabled);
   border-radius: 4px;
-  color: #cdd6f4;
+  color: var(--text-primary);
   font-size: 13px;
   margin-bottom: 8px;
 }
 
 .import-filter:focus {
-  border-color: #89b4fa;
+  border-color: var(--accent);
   outline: none;
 }
 
@@ -701,14 +701,14 @@ h2 {
   justify-content: space-between;
   align-items: center;
   font-size: 11px;
-  color: #a6adc8;
+  color: var(--text-secondary);
   margin-bottom: 6px;
 }
 
 .mini {
-  background: #313244;
-  border: 1px solid #45475a;
-  color: #cdd6f4;
+  background: var(--surface);
+  border: 1px solid var(--text-disabled);
+  color: var(--text-primary);
   border-radius: 4px;
   font-size: 11px;
   padding: 1px 8px;
@@ -717,14 +717,14 @@ h2 {
 }
 
 .mini:hover {
-  background: #45475a;
+  background: var(--text-disabled);
 }
 
 .import-list {
   flex: 1;
   min-height: 120px;
   overflow-y: auto;
-  border: 1px solid #313244;
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 4px;
   display: flex;
@@ -743,11 +743,11 @@ h2 {
 }
 
 .import-item:hover {
-  background: #313244;
+  background: var(--surface);
 }
 
 .import-empty {
-  color: #6c7086;
+  color: var(--text-muted);
   text-align: center;
   padding: 16px 0;
   font-size: 12px;
@@ -768,10 +768,10 @@ h2 {
   margin-top: 2px;
   max-height: 220px;
   overflow-y: auto;
-  background: #24243a;
-  border: 1px solid #45475a;
+  background: var(--bg-panel);
+  border: 1px solid var(--text-disabled);
   border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 4px 16px var(--shadow-sm);
   z-index: 20;
 }
 
@@ -786,11 +786,11 @@ h2 {
 }
 
 .combo-item.highlighted {
-  background: #45475a;
+  background: var(--text-disabled);
 }
 
 .combo-name {
-  color: #89b4fa;
+  color: var(--accent);
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -815,13 +815,13 @@ h2 {
   align-items: center;
   gap: 8px;
   font-size: 13px;
-  color: #cdd6f4;
+  color: var(--text-primary);
   cursor: pointer;
   user-select: none;
 }
 
 .check input[type='checkbox'] {
-  accent-color: #4f6ec2;
+  accent-color: var(--scrollbar-thumb);
   width: 14px;
   height: 14px;
   cursor: pointer;
@@ -833,7 +833,7 @@ h2 {
 }
 
 .combo-host {
-  color: #a6adc8;
+  color: var(--text-secondary);
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -846,23 +846,23 @@ h2 {
   background: transparent;
   border: 1px solid transparent;
   border-radius: 4px;
-  color: #a6adc8;
+  color: var(--text-secondary);
   font-size: 13px;
   cursor: pointer;
 }
 
 .combo-clone:hover {
-  border-color: #45475a;
-  background: #313244;
-  color: #89b4fa;
+  border-color: var(--text-disabled);
+  background: var(--surface);
+  color: var(--accent);
 }
 
 .saved {
   margin-top: 12px;
   padding: 8px;
-  background: #313244;
-  border-left: 3px solid #a6e3a1;
-  color: #a6e3a1;
+  background: var(--surface);
+  border-left: 3px solid var(--success);
+  color: var(--success);
   font-size: 12px;
   border-radius: 4px;
 }
@@ -895,35 +895,35 @@ h2 {
 
 .field label {
   font-size: 12px;
-  color: #a6adc8;
+  color: var(--text-secondary);
 }
 
 .field input,
 .field select {
   padding: 6px 10px;
-  background: #313244;
-  border: 1px solid #45475a;
+  background: var(--surface);
+  border: 1px solid var(--text-disabled);
   border-radius: 4px;
-  color: #cdd6f4;
+  color: var(--text-primary);
   font-size: 13px;
   outline: none;
 }
 
 .field input:focus,
 .field select:focus {
-  border-color: #89b4fa;
+  border-color: var(--accent);
 }
 
 .hint {
   margin-top: 8px;
   font-size: 11px;
-  color: #6c7086;
+  color: var(--text-muted);
   line-height: 1.5;
 }
 
 .hint code {
-  color: #89b4fa;
-  background: #313244;
+  color: var(--accent);
+  background: var(--surface);
   padding: 0 4px;
   border-radius: 3px;
 }
@@ -931,9 +931,9 @@ h2 {
 .error {
   margin-top: 12px;
   padding: 8px;
-  background: #45475a;
-  border-left: 3px solid #f38ba8;
-  color: #f38ba8;
+  background: var(--text-disabled);
+  border-left: 3px solid var(--error);
+  color: var(--error);
   font-size: 12px;
   border-radius: 4px;
 }
@@ -951,22 +951,22 @@ h2 {
   border-radius: 4px;
   font-size: 13px;
   cursor: pointer;
-  border: 1px solid #45475a;
+  border: 1px solid var(--text-disabled);
 }
 
 .btn.cancel {
-  background: #313244;
-  color: #cdd6f4;
+  background: var(--surface);
+  color: var(--text-primary);
 }
 
 .btn.primary {
-  background: #89b4fa;
-  color: #1e1e2e;
-  border-color: #89b4fa;
+  background: var(--accent);
+  color: var(--bg-primary);
+  border-color: var(--accent);
 }
 
 .btn.primary:hover {
-  background: #74c7ec;
+  background: var(--accent-hover);
 }
 
 .btn:disabled {

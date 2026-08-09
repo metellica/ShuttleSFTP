@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { useTabsStore } from '@/stores/tabs'
+import { useTabsStore, type Pane } from '@/stores/tabs'
+import { useViewSettingsStore } from '@/stores/viewSettings'
 import TabBar from '@/components/layout/TabBar.vue'
 import Toolbar from '@/components/layout/Toolbar.vue'
 import ConnectDialog from '@/components/connection/ConnectDialog.vue'
@@ -8,7 +9,7 @@ import RemotePanel from '@/components/browser/RemotePanel.vue'
 import TransferQueue from '@/components/transfer/TransferQueue.vue'
 import PrepareOverlay from '@/components/layout/PrepareOverlay.vue'
 import TerminalPanel from '@/components/terminal/TerminalPanel.vue'
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { uploadFiles, downloadFiles, mkDir, listBookmarks } from '@/composables/useTauri'
@@ -22,11 +23,33 @@ import type { ConnectedMeta } from '@/types/connection'
 const tabsStore = useTabsStore()
 const transferStore = useTransferStore()
 const prepareStore = usePrepareStore()
+const view = useViewSettingsStore()
 const showConnectDialog = ref(false)
 const showBookmarksDialog = ref(false)
-const remotePanelRef = ref<InstanceType<typeof RemotePanel> | null>(null)
 const unlisteners: UnlistenFn[] = []
 const terminalsStore = useTerminalsStore()
+const contentRef = ref<HTMLElement | null>(null)
+
+/** One RemotePanel per pane, keyed by pane id. */
+const panels = new Map<string, InstanceType<typeof RemotePanel>>()
+
+function setPanel(paneId: string, el: unknown) {
+  if (el) panels.set(paneId, el as InstanceType<typeof RemotePanel>)
+}
+
+function activePanel(): InstanceType<typeof RemotePanel> | null {
+  return panels.get(tabsStore.activePaneId) ?? null
+}
+
+/** The active tab for a given pane — independent of which pane is focused. */
+function paneTab(pane: Pane) {
+  return pane.tabs.find((t) => t.id === pane.activeTabId) ?? null
+}
+
+/** Both rows of the split — the tab bars and the panes — share a grid. */
+const columns = computed(() =>
+  tabsStore.split ? `${view.splitRatio}fr 5px ${1 - view.splitRatio}fr` : '1fr'
+)
 
 function onOpenTerminal() {
   const tab = tabsStore.activeTab
@@ -34,9 +57,8 @@ function onOpenTerminal() {
   terminalsStore.open(tab.id, tab.sessionId, tab.currentPath)
 }
 
-// Coalesce high-frequency backend events: progress updates are batched
-// and applied at most every 100ms; bulk re-syncs are debounced. Keeps
-// a huge queue from re-rendering per event.
+// --- Transfer event coalescing -------------------------------------------
+
 const pendingProgress = new Map<string, TransferProgress>()
 let progressTimer: ReturnType<typeof setTimeout> | null = null
 function queueProgress(p: TransferProgress) {
@@ -66,7 +88,7 @@ let refreshTimer: ReturnType<typeof setTimeout> | null = null
 function queueRefresh() {
   refreshTimer ??= setTimeout(() => {
     refreshTimer = null
-    remotePanelRef.value?.refresh()
+    activePanel()?.refresh()
   }, 500)
 }
 
@@ -78,8 +100,6 @@ onMounted(async () => {
   document.addEventListener('contextmenu', preventDefaultContextMenu)
   if (tabsStore.tabs.length === 0) {
     tabsStore.addTab()
-    // Returning users go straight to their bookmarks; first-timers get
-    // the connect dialog.
     try {
       const bookmarks = await listBookmarks()
       if (bookmarks.length > 0) {
@@ -92,25 +112,19 @@ onMounted(async () => {
     }
   }
 
-  // Restore persisted transfers (interrupted ones come back as paused)
   transferStore.syncTasks().catch((e) => console.error('Cannot load transfers:', e))
 
   unlisteners.push(
-    // Drives the blocking "Preparing…" overlay for bulk operations
     await listen<PrepareProgressEvent>('prepare:progress', (e) => {
       prepareStore.onProgress(e.payload)
     })
   )
   unlisteners.push(
-    // Bulk operations (cancel/pause/resume all) send one event instead of
-    // thousands of per-task events: re-sync the whole list once.
     await listen('transfer:bulk-update', () => {
       queueSync()
     })
   )
   unlisteners.push(
-    // Emitted per queued file: makes the queue bar appear immediately,
-    // even while a long multi-file transfer command is still queueing.
     await listen<TransferTask>('transfer:queued', (e) => {
       transferStore.addTask(e.payload)
     })
@@ -127,9 +141,6 @@ onMounted(async () => {
         transferStore.updateTask(e.payload.taskId, { status: e.payload.status })
         if (e.payload.status === 'completed') {
           const task = transferStore.getTask(e.payload.taskId)
-          // Refresh unless we know it was a download (remote dir unchanged).
-          // Debounced: a large directory upload completes thousands of
-          // tasks, each of which would otherwise trigger a listing.
           if (!task || task.direction === 'upload' || task.direction === 'remote') {
             queueRefresh()
           }
@@ -173,7 +184,6 @@ function onBookmarkConnected(
   path: string,
   meta: ConnectedMeta
 ) {
-  // Reuse the active tab if it's idle, otherwise open a new one
   const tab =
     tabsStore.activeTab && tabsStore.activeTab.status === 'disconnected'
       ? tabsStore.activeTab
@@ -237,7 +247,7 @@ async function onDownload() {
   const tab = tabsStore.activeTab
   if (!tab?.sessionId) return
 
-  const selectedFiles = remotePanelRef.value?.selectedFiles
+  const selectedFiles = activePanel()?.selectedFiles
   if (!selectedFiles || selectedFiles.length === 0) return
 
   const localDir = await open({
@@ -258,7 +268,7 @@ async function onDownload() {
 }
 
 function onRefresh() {
-  remotePanelRef.value?.refresh()
+  activePanel()?.refresh()
 }
 
 async function onNewFolder() {
@@ -273,17 +283,54 @@ async function onNewFolder() {
     : `${tab.currentPath}/${name}`
   try {
     await mkDir(tab.sessionId, path)
-    remotePanelRef.value?.refresh()
+    activePanel()?.refresh()
   } catch (e) {
     console.error('Create folder failed:', e)
   }
 }
+
+// --- Splitter drag -------------------------------------------------------
+
+function startSplitDrag() {
+  const host = contentRef.value
+  if (!host) return
+  const rect = host.getBoundingClientRect()
+  const move = (e: MouseEvent) => view.setSplitRatio((e.clientX - rect.left) / rect.width)
+  const stop = () => {
+    window.removeEventListener('mousemove', move)
+    window.removeEventListener('mouseup', stop)
+    document.body.classList.remove('splitting')
+  }
+  window.addEventListener('mousemove', move)
+  window.addEventListener('mouseup', stop)
+  document.body.classList.add('splitting')
+}
+
+// --- Keyboard shortcuts --------------------------------------------------
+
+function onKeyDown(e: KeyboardEvent) {
+  const mod = e.ctrlKey || e.metaKey
+  // Ctrl+\ toggles the split
+  if (mod && e.key === '\\') {
+    e.preventDefault()
+    tabsStore.toggleSplit()
+  }
+}
+
+onMounted(() => window.addEventListener('keydown', onKeyDown))
+onUnmounted(() => window.removeEventListener('keydown', onKeyDown))
 </script>
 
 <template>
   <div class="app-container">
-    <TabBar @new-tab="onNewTab" />
+    <div class="tab-bars" :style="{ gridTemplateColumns: columns }">
+      <template v-for="(pane, index) in tabsStore.panes" :key="pane.id">
+        <div v-if="index > 0" class="tab-bars-gap" />
+        <TabBar :pane="pane" @new-tab="tabsStore.addTabIn(pane.id)" />
+      </template>
+    </div>
     <Toolbar
+      :split="tabsStore.split"
       @connect="onShowConnect"
       @bookmarks="showBookmarksDialog = true"
       @upload="onUpload"
@@ -292,12 +339,32 @@ async function onNewFolder() {
       @refresh="onRefresh"
       @new-folder="onNewFolder"
       @terminal="onOpenTerminal"
+      @toggle-split="tabsStore.toggleSplit()"
     />
-    <main class="main-content">
-      <RemotePanel v-if="tabsStore.activeTab?.status === 'connected'" ref="remotePanelRef" />
-      <div v-else class="empty-state">
-        <p>Click "Connect" or press the + tab to start a new SFTP session</p>
-      </div>
+    <main ref="contentRef" class="main-content" :style="{ gridTemplateColumns: columns }">
+      <template v-for="(pane, index) in tabsStore.panes" :key="pane.id">
+        <div
+          v-if="index > 0"
+          class="splitter"
+          title="Drag to resize, double-click to even out"
+          @mousedown.prevent="startSplitDrag"
+          @dblclick="view.setSplitRatio(0.5)"
+        />
+        <section
+          class="pane"
+          :class="{ focused: tabsStore.split && tabsStore.activePaneId === pane.id }"
+          @mousedown.capture="tabsStore.setActivePane(pane.id)"
+        >
+          <RemotePanel
+            v-if="paneTab(pane)?.status === 'connected'"
+            :ref="(el) => setPanel(pane.id, el)"
+            :tab-id="paneTab(pane)?.id"
+          />
+          <div v-else class="empty-state">
+            <p>Click "Connect" or press the + tab to start a new SFTP session</p>
+          </div>
+        </section>
+      </template>
     </main>
     <TerminalPanel />
     <TransferQueue />
@@ -327,7 +394,6 @@ body {
   overflow: hidden;
 }
 
-/* Flat themed scrollbars (WebView2 / Chromium) */
 ::-webkit-scrollbar {
   width: 12px;
   height: 12px;
@@ -338,24 +404,28 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #4f6ec2;
+  background: var(--scrollbar-thumb);
   border-radius: 6px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #6b8ae0;
+  background: var(--scrollbar-thumb-hover);
 }
 
 ::-webkit-scrollbar-thumb:active {
-  background: #89b4fa;
+  background: var(--scrollbar-thumb-active);
 }
 
 ::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-/* The pointer must not become a text cursor halfway through a column drag. */
 body.col-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.splitting {
   cursor: col-resize;
   user-select: none;
 }
@@ -366,13 +436,51 @@ body.col-resizing {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: #1e1e2e;
-  color: #cdd6f4;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.tab-bars {
+  display: grid;
+  min-width: 0;
+}
+
+.tab-bars-gap {
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  border-left: 1px solid var(--border);
 }
 
 .main-content {
   flex: 1;
   overflow: hidden;
+  display: grid;
+  min-height: 0;
+}
+
+.pane {
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pane.focused::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-top: 2px solid var(--accent);
+  pointer-events: none;
+}
+
+.splitter {
+  background: var(--border);
+  cursor: col-resize;
+}
+
+.splitter:hover {
+  background: var(--accent);
 }
 
 .empty-state {
@@ -380,7 +488,7 @@ body.col-resizing {
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: #6c7086;
+  color: var(--text-muted);
   font-size: 14px;
 }
 </style>

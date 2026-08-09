@@ -102,8 +102,8 @@ function onResizeStart(e: MouseEvent) {
   display: flex;
   flex-direction: column;
   min-height: 120px;
-  background: #181825;
-  border-top: 1px solid #313244;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
   flex-shrink: 0;
   position: relative;
 }
@@ -119,7 +119,7 @@ function onResizeStart(e: MouseEvent) {
 }
 
 .resize-handle:hover {
-  background: rgba(137, 180, 250, 0.3);
+  background: var(--accent-alpha);
 }
 
 .term-header {
@@ -127,8 +127,8 @@ function onResizeStart(e: MouseEvent) {
   align-items: center;
   gap: 8px;
   padding: 3px 10px;
-  background: #1e1e2e;
-  border-bottom: 1px solid #313244;
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 
@@ -150,11 +150,11 @@ function onResizeStart(e: MouseEvent) {
   align-items: center;
   gap: 6px;
   padding: 2px 4px 2px 10px;
-  background: #24243a;
-  border: 1px solid #313244;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
   border-radius: 4px;
   font-size: 12px;
-  color: #a6adc8;
+  color: var(--text-secondary);
   cursor: pointer;
   flex-shrink: 0;
   max-width: 220px;
@@ -162,9 +162,9 @@ function onResizeStart(e: MouseEvent) {
 }
 
 .term-tab.active {
-  background: #313244;
-  color: #cdd6f4;
-  border-color: #45475a;
+  background: var(--surface);
+  color: var(--text-primary);
+  border-color: var(--text-disabled);
 }
 
 .term-tab-title {
@@ -177,7 +177,7 @@ function onResizeStart(e: MouseEvent) {
 .term-tab-close {
   background: transparent;
   border: none;
-  color: #6c7086;
+  color: var(--text-muted);
   cursor: pointer;
   font-size: 10px;
   padding: 2px 4px;
@@ -186,15 +186,15 @@ function onResizeStart(e: MouseEvent) {
 }
 
 .term-tab-close:hover {
-  background: #45475a;
-  color: #f38ba8;
+  background: var(--text-disabled);
+  color: var(--error);
 }
 
 .term-add {
   background: transparent;
-  border: 1px solid #313244;
+  border: 1px solid var(--border);
   border-radius: 4px;
-  color: #a6adc8;
+  color: var(--text-secondary);
   cursor: pointer;
   font-size: 14px;
   line-height: 1;
@@ -203,7 +203,7 @@ function onResizeStart(e: MouseEvent) {
 }
 
 .term-add:hover {
-  background: #313244;
-  color: #cdd6f4;
+  background: var(--surface);
+  color: var(--text-primary);
 }
 </style>

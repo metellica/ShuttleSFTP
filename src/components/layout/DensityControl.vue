@@ -116,7 +116,7 @@ onUnmounted(() => {
   background: none;
   border: none;
   border-radius: 4px;
-  color: #6c7086;
+  color: var(--text-muted);
   cursor: pointer;
   padding: 2px 8px;
   line-height: 1.4;
@@ -124,13 +124,13 @@ onUnmounted(() => {
 }
 
 .trigger:hover {
-  background: #313244;
-  color: #cdd6f4;
+  background: var(--surface);
+  color: var(--text-primary);
 }
 
 .trigger.active {
-  background: #4f6ec2;
-  color: #ffffff;
+  background: var(--scrollbar-thumb);
+  color: var(--accent-text);
 }
 
 .glyph {
@@ -141,29 +141,29 @@ onUnmounted(() => {
 
 .badge {
   font-size: 9px;
-  color: #89b4fa;
+  color: var(--accent);
   line-height: 1;
 }
 
 .trigger.active .badge {
-  color: #ffffff;
+  color: var(--accent-text);
 }
 
 .popover {
   position: fixed;
   z-index: 250;
   width: 208px;
-  background: #24243a;
-  border: 1px solid #45475a;
+  background: var(--bg-panel);
+  border: 1px solid var(--text-disabled);
   border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 4px 16px var(--shadow-sm);
   padding: 10px;
   white-space: normal;
 }
 
 .title {
   font-size: 11px;
-  color: #a6adc8;
+  color: var(--text-secondary);
   margin-bottom: 8px;
 }
 
@@ -180,22 +180,22 @@ onUnmounted(() => {
   align-items: center;
   gap: 2px;
   padding: 6px 2px;
-  background: #181825;
-  border: 1px solid #313244;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
   border-radius: 4px;
-  color: #cdd6f4;
+  color: var(--text-primary);
   font-size: 10px;
   font-family: inherit;
   cursor: pointer;
 }
 
 .preset:hover {
-  border-color: #89b4fa;
+  border-color: var(--accent);
 }
 
 .preset.selected {
-  border-color: #89b4fa;
-  background: #2c3a5c;
+  border-color: var(--accent);
+  background: var(--bg-selected);
 }
 
 .preset-glyph {
@@ -208,7 +208,7 @@ onUnmounted(() => {
 
 .slider {
   width: 100%;
-  accent-color: #4f6ec2;
+  accent-color: var(--scrollbar-thumb);
   cursor: pointer;
 }
 
@@ -218,13 +218,13 @@ onUnmounted(() => {
   justify-content: space-between;
   margin-top: 6px;
   font-size: 11px;
-  color: #6c7086;
+  color: var(--text-muted);
 }
 
 .reset {
   background: none;
   border: none;
-  color: #89b4fa;
+  color: var(--accent);
   font-size: 11px;
   font-family: inherit;
   cursor: pointer;
@@ -232,7 +232,7 @@ onUnmounted(() => {
 }
 
 .reset:disabled {
-  color: #45475a;
+  color: var(--text-disabled);
   cursor: default;
 }
 </style>

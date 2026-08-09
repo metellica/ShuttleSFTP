@@ -581,8 +581,8 @@ async function onShowInFolder(path: string | null) {
 
 <style scoped>
 .transfer-queue {
-  border-top: 1px solid #313244;
-  background: #181825;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
   max-height: 200px;
   overflow-y: auto;
 }
@@ -593,14 +593,14 @@ async function onShowInFolder(path: string | null) {
   align-items: center;
   padding: 6px 12px;
   font-size: 12px;
-  color: #a6adc8;
-  border-bottom: 1px solid #313244;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
 }
 
 .clear-btn {
   background: none;
   border: none;
-  color: #89b4fa;
+  color: var(--accent);
   cursor: pointer;
   font-size: 11px;
 }
@@ -626,12 +626,12 @@ async function onShowInFolder(path: string | null) {
   border-radius: 3px;
 }
 
-.task-status.queued { color: #f9e2af; }
-.task-status.active { color: #89b4fa; }
-.task-status.paused { color: #fab387; }
-.task-status.completed { color: #a6e3a1; }
-.task-status.failed { color: #f38ba8; }
-.task-status.cancelled { color: #6c7086; }
+.task-status.queued { color: var(--warning); }
+.task-status.active { color: var(--accent); }
+.task-status.paused { color: var(--warning); }
+.task-status.completed { color: var(--success); }
+.task-status.failed { color: var(--error); }
+.task-status.cancelled { color: var(--text-muted); }
 
 .header-actions {
   display: flex;
@@ -641,16 +641,16 @@ async function onShowInFolder(path: string | null) {
 
 .hdr-btn {
   background: none;
-  border: 1px solid #45475a;
+  border: 1px solid var(--text-disabled);
   border-radius: 3px;
-  color: #cdd6f4;
+  color: var(--text-primary);
   cursor: pointer;
   font-size: 11px;
   padding: 1px 6px;
 }
 
-.hdr-btn:hover { background: #313244; }
-.hdr-btn.danger { color: #f38ba8; }
+.hdr-btn:hover { background: var(--surface); }
+.hdr-btn.danger { color: var(--error); }
 
 .task-actions {
   display: flex;
@@ -663,18 +663,18 @@ async function onShowInFolder(path: string | null) {
 }
 
 .group-row:hover {
-  background: #1e1e2e;
+  background: var(--bg-primary);
 }
 
 .group-toggle {
   width: 12px;
-  color: #a6adc8;
+  color: var(--text-secondary);
   font-size: 10px;
 }
 
 .group-count {
   font-size: 11px;
-  color: #6c7086;
+  color: var(--text-muted);
   white-space: nowrap;
 }
 
@@ -684,7 +684,7 @@ async function onShowInFolder(path: string | null) {
 
 .task-details {
   padding: 4px 12px 6px 32px;
-  background: #11111b;
+  background: var(--bg-secondary);
   font-size: 11px;
 }
 
@@ -699,13 +699,13 @@ async function onShowInFolder(path: string | null) {
 }
 
 .dt-label {
-  color: #6c7086;
+  color: var(--text-muted);
   min-width: 44px;
   flex-shrink: 0;
 }
 
 .dt-val {
-  color: #cdd6f4;
+  color: var(--text-primary);
   word-break: break-all;
   user-select: text;
 }
@@ -713,14 +713,14 @@ async function onShowInFolder(path: string | null) {
 .act-btn {
   background: none;
   border: none;
-  color: #a6adc8;
+  color: var(--text-secondary);
   cursor: pointer;
   font-size: 12px;
   padding: 0 2px;
 }
 
-.act-btn:hover { color: #cdd6f4; }
-.act-btn.danger:hover { color: #f38ba8; }
+.act-btn:hover { color: var(--text-primary); }
+.act-btn.danger:hover { color: var(--error); }
 
 .task-progress {
   display: flex;
@@ -731,14 +731,14 @@ async function onShowInFolder(path: string | null) {
 
 .task-speed {
   font-size: 11px;
-  color: #94e2d5;
+  color: var(--accent);
   min-width: 70px;
   text-align: right;
   white-space: nowrap;
 }
 
 .total-speed {
-  color: #94e2d5;
+  color: var(--accent);
   font-size: 11px;
   margin-left: auto;
   margin-right: 12px;
@@ -747,24 +747,24 @@ async function onShowInFolder(path: string | null) {
 .progress-bar {
   flex: 1;
   height: 4px;
-  background: #313244;
+  background: var(--surface);
   border-radius: 2px;
   overflow: hidden;
 }
 
 .progress-fill {
   height: 100%;
-  background: #89b4fa;
+  background: var(--accent);
   transition: width 0.2s;
 }
 
 .progress-fill.paused {
-  background: #fab387;
+  background: var(--warning);
 }
 
 .progress-text {
   font-size: 11px;
-  color: #a6adc8;
+  color: var(--text-secondary);
   min-width: 32px;
 }
 </style>

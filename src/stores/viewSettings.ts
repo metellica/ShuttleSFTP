@@ -12,6 +12,10 @@ export const MIN_ROW_SCALE = 0.75
 export const MAX_ROW_SCALE = 2.5
 export const ROW_SCALE_STEP = 0.08
 
+/** Neither pane may be squeezed past this share of the window. */
+export const MIN_SPLIT_RATIO = 0.15
+export const MAX_SPLIT_RATIO = 0.85
+
 export interface RowPreset {
   id: 'small' | 'medium' | 'large'
   label: string
@@ -66,6 +70,7 @@ interface StoredView {
   rowScale: number
   columnWidths: ColumnWidths
   stretchName: boolean
+  splitRatio: number
 }
 
 /** A setting missing from an older payload falls back to its default. */
@@ -74,6 +79,7 @@ function load(): StoredView {
     rowScale: 1,
     columnWidths: { ...DEFAULT_COLUMN_WIDTHS },
     stretchName: true,
+    splitRatio: 0.5,
   }
   const raw = localStorage.getItem(STORAGE_KEY)
   if (!raw) return fallback
@@ -82,6 +88,7 @@ function load(): StoredView {
       rowScale?: unknown
       columnWidths?: Partial<ColumnWidths>
       stretchName?: unknown
+      splitRatio?: unknown
     }
     if (typeof parsed.rowScale === 'number') fallback.rowScale = clamp(parsed.rowScale)
     for (const key of COLUMN_KEYS) {
@@ -91,10 +98,16 @@ function load(): StoredView {
       )
     }
     if (typeof parsed.stretchName === 'boolean') fallback.stretchName = parsed.stretchName
+    if (typeof parsed.splitRatio === 'number') fallback.splitRatio = clampRatio(parsed.splitRatio)
     return fallback
   } catch {
     return fallback
   }
+}
+
+function clampRatio(value: number): number {
+  if (!Number.isFinite(value)) return 0.5
+  return Math.min(MAX_SPLIT_RATIO, Math.max(MIN_SPLIT_RATIO, value))
 }
 
 export const useViewSettingsStore = defineStore('viewSettings', () => {
@@ -104,6 +117,7 @@ export const useViewSettingsStore = defineStore('viewSettings', () => {
   // Until a divider is dragged the name column fills whatever is left, which
   // is the layout most people expect from a fresh window.
   const stretchName = ref(stored.stretchName)
+  const splitRatio = ref(0.5)
 
   function save() {
     localStorage.setItem(
@@ -112,11 +126,12 @@ export const useViewSettingsStore = defineStore('viewSettings', () => {
         rowScale: rowScale.value,
         columnWidths: { ...columnWidths.value },
         stretchName: stretchName.value,
+        splitRatio: splitRatio.value,
       })
     )
   }
 
-  watch([rowScale, stretchName], save)
+  watch([rowScale, stretchName, splitRatio], save)
   watch(columnWidths, save, { deep: true })
 
   /** The preset the current scale corresponds to, if any. */
@@ -165,10 +180,16 @@ export const useViewSettingsStore = defineStore('viewSettings', () => {
     stretchName.value = true
   }
 
+  /** Dragged splitter position, as the left pane's share of the width. */
+  function setSplitRatio(value: number) {
+    splitRatio.value = clampRatio(value)
+  }
+
   return {
     rowScale,
     columnWidths,
     stretchName,
+    splitRatio,
     activePreset,
     percent,
     setScale,
@@ -176,6 +197,7 @@ export const useViewSettingsStore = defineStore('viewSettings', () => {
     setColumnWidth,
     resetColumnWidth,
     resetColumnWidths,
+    setSplitRatio,
     nudge,
     reset,
   }

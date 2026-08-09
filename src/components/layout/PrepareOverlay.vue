@@ -62,7 +62,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown, true))
 .prepare-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -70,12 +70,12 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown, true))
 }
 
 .prepare-dialog {
-  background: #1e1e2e;
-  border: 1px solid #45475a;
+  background: var(--bg-primary);
+  border: 1px solid var(--text-disabled);
   border-radius: 8px;
   padding: 24px;
   width: 380px;
-  color: #cdd6f4;
+  color: var(--text-primary);
 }
 
 h3 {
@@ -93,8 +93,8 @@ h3 {
 .spinner {
   width: 16px;
   height: 16px;
-  border: 2px solid #45475a;
-  border-top-color: #89b4fa;
+  border: 2px solid var(--text-disabled);
+  border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
   flex-shrink: 0;
@@ -108,12 +108,12 @@ h3 {
 
 .status {
   font-size: 13px;
-  color: #bac2de;
+  color: var(--text-secondary);
 }
 
 .bar {
   height: 6px;
-  background: #313244;
+  background: var(--surface);
   border-radius: 3px;
   overflow: hidden;
   margin-bottom: 16px;
@@ -121,7 +121,7 @@ h3 {
 
 .fill {
   height: 100%;
-  background: #89b4fa;
+  background: var(--accent);
   border-radius: 3px;
   transition: width 0.15s ease;
 }
@@ -147,16 +147,16 @@ h3 {
 
 .cancel-btn {
   padding: 6px 16px;
-  background: #313244;
-  color: #cdd6f4;
-  border: 1px solid #45475a;
+  background: var(--surface);
+  color: var(--text-primary);
+  border: 1px solid var(--text-disabled);
   border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
 }
 
 .cancel-btn:hover:not(:disabled) {
-  background: #45475a;
+  background: var(--text-disabled);
 }
 
 .cancel-btn:disabled {

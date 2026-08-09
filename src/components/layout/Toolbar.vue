@@ -1,4 +1,10 @@
 <script setup lang="ts">
+import { useThemeStore } from '@/stores/theme'
+
+const props = defineProps<{
+  split: boolean
+}>()
+
 const emit = defineEmits<{
   connect: []
   bookmarks: []
@@ -8,7 +14,10 @@ const emit = defineEmits<{
   refresh: []
   newFolder: []
   terminal: []
+  'toggle-split': []
 }>()
+
+const theme = useThemeStore()
 </script>
 
 <template>
@@ -37,16 +46,36 @@ const emit = defineEmits<{
     <button class="btn" @click="emit('terminal')">
       <span>🖥</span> Terminal
     </button>
+    <span class="spacer" />
+    <button
+      class="btn icon-btn"
+      :title="props.split ? 'Close split view (Ctrl+\\)' : 'Split view (Ctrl+\\)'"
+      @click="emit('toggle-split')"
+    >
+      ◫
+    </button>
+    <button
+      class="btn icon-btn"
+      :title="theme.theme === 'dark' ? 'Light mode' : 'Dark mode'"
+      @click="theme.toggle()"
+    >
+      {{ theme.theme === 'dark' ? '☀' : '☾' }}
+    </button>
   </div>
 </template>
 
 <style scoped>
 .toolbar {
   display: flex;
+  align-items: center;
   gap: 4px;
   padding: 6px 12px;
-  background: #1e1e2e;
-  border-bottom: 1px solid #313244;
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border);
+}
+
+.spacer {
+  flex: 1;
 }
 
 .btn {
@@ -54,15 +83,22 @@ const emit = defineEmits<{
   align-items: center;
   gap: 4px;
   padding: 4px 10px;
-  background: #313244;
-  border: 1px solid #45475a;
+  background: var(--surface);
+  border: 1px solid var(--text-disabled);
   border-radius: 4px;
-  color: #cdd6f4;
+  color: var(--text-primary);
   font-size: 12px;
   cursor: pointer;
+  font-family: inherit;
+  flex-shrink: 0;
 }
 
 .btn:hover {
-  background: #45475a;
+  background: var(--text-disabled);
+}
+
+.icon-btn {
+  padding: 4px 8px;
+  font-size: 14px;
 }
 </style>

@@ -22,11 +22,17 @@ interface Column {
   selectedPath: string | null
 }
 
+const props = defineProps<{ tabId?: string }>()
+
 const tabsStore = useTabsStore()
 const transferStore = useTransferStore()
 const clipboard = useClipboardStore()
 const prepareStore = usePrepareStore()
 const viewSettings = useViewSettingsStore()
+
+/** The tab this panel is rendering — independent of which pane is focused. */
+const tab = computed(() => tabsStore.tabs.find((t) => t.id === props.tabId) ?? null)
+
 const columns = ref<Column[]>([])
 const dragOver = ref(false)
 const selectedPaths = ref<Set<string>>(new Set())
@@ -307,8 +313,8 @@ const previewCtxMenu = ref<{ visible: boolean; x: number; y: number; hasSelectio
   hasSelection: false,
 })
 
-const currentPath = computed(() => tabsStore.activeTab?.currentPath || '/')
-const sessionId = computed(() => tabsStore.activeTab?.sessionId || '')
+const currentPath = computed(() => tab.value?.currentPath || '/')
+const sessionId = computed(() => tab.value?.sessionId || '')
 
 // Editable path bar state
 const pathEdit = ref<{ active: boolean; value: string }>({ active: false, value: '' })
@@ -460,9 +466,9 @@ async function buildColumns(path: string) {
       selectedPaths.value.clear()
       selectedPaths.value.add(fileEntry.path)
       selectionAnchor.value = { colIndex: loaded.length - 1, path: fileEntry.path }
-      if (tabsStore.activeTab && tabsStore.activeTab.currentPath !== parent.path) {
+      if (tab.value && tab.value.currentPath !== parent.path) {
         suppressWatch = true
-        tabsStore.updateTab(tabsStore.activeTab.id, { currentPath: parent.path })
+        tabsStore.updateTab(tab.value.id, { currentPath: parent.path })
       }
       loadPreview(fileEntry)
     }
@@ -500,9 +506,9 @@ async function loadList(path: string) {
       selectedPaths.value.clear()
       selectedPaths.value.add(fileEntry.path)
       selectionAnchor.value = { colIndex: null, path: fileEntry.path }
-      if (tabsStore.activeTab && tabsStore.activeTab.currentPath !== parentDir) {
+      if (tab.value && tab.value.currentPath !== parentDir) {
         suppressWatch = true
-        tabsStore.updateTab(tabsStore.activeTab.id, { currentPath: parentDir })
+        tabsStore.updateTab(tab.value.id, { currentPath: parentDir })
       }
       loadPreview(fileEntry)
     } catch {
@@ -522,8 +528,8 @@ async function refresh() {
 }
 
 function navigateTo(path: string) {
-  if (tabsStore.activeTab) {
-    tabsStore.updateTab(tabsStore.activeTab.id, { currentPath: path })
+  if (tab.value) {
+    tabsStore.updateTab(tab.value.id, { currentPath: path })
   }
 }
 
@@ -580,18 +586,18 @@ async function onEntryClick(colIndex: number, entry: FileEntry, event: MouseEven
     columns.value = columns.value.slice(0, colIndex + 1)
     const newCol = await loadColumn(entry.path)
     columns.value.push(newCol)
-    if (tabsStore.activeTab) {
+    if (tab.value) {
       // Update path without triggering a full rebuild
       suppressWatch = true
-      tabsStore.updateTab(tabsStore.activeTab.id, { currentPath: entry.path })
+      tabsStore.updateTab(tab.value.id, { currentPath: entry.path })
     }
     scrollToEnd()
   } else {
     // Selecting a file: current dir is the column's dir
     columns.value = columns.value.slice(0, colIndex + 1)
-    if (tabsStore.activeTab && tabsStore.activeTab.currentPath !== col.path) {
+    if (tab.value && tab.value.currentPath !== col.path) {
       suppressWatch = true
-      tabsStore.updateTab(tabsStore.activeTab.id, { currentPath: col.path })
+      tabsStore.updateTab(tab.value.id, { currentPath: col.path })
     }
     loadPreview(entry)
     scrollToEnd()
@@ -862,7 +868,7 @@ function copyFilesToClipboard() {
   const sid = sessionId.value
   const targets = selectedFiles.value.map((f) => f.path)
   if (!sid || targets.length === 0) return
-  clipboard.set(sid, targets, tabsStore.activeTab?.label ?? '')
+  clipboard.set(sid, targets, tab.value?.label ?? '')
 }
 
 function ctxCopyFiles() {
@@ -1038,10 +1044,10 @@ async function ctxDelete() {
 async function ctxAddBookmark() {
   const entry = ctxMenu.value.entry
   hideCtxMenu()
-  const tab = tabsStore.activeTab
-  if (!tab) return
-  const params = tab.connectParams
-  if (tab.kind === 'ssh' && !params) return
+  const activeTab = tab.value
+  if (!activeTab) return
+  const params = activeTab.connectParams
+  if (activeTab.kind === 'ssh' && !params) return
 
   // Bookmark the folder itself, or the containing dir for files
   const path = entry?.isDir ? entry.path : currentPath.value
@@ -1050,8 +1056,8 @@ async function ctxAddBookmark() {
 
   // Connection alias from the tab label ("user@alias"), for display
   const prefix = `${params?.username ?? ''}@`
-  let hostAlias = tab.label.startsWith(prefix)
-    ? tab.label.slice(prefix.length)
+  let hostAlias = activeTab.label.startsWith(prefix)
+    ? activeTab.label.slice(prefix.length)
     : undefined
   // Label was the bare host/IP, not a real alias: keep the ip:port fallback
   if (hostAlias === params?.host) hostAlias = undefined
@@ -1065,7 +1071,7 @@ async function ctxAddBookmark() {
     ...(hostAlias ? { hostAlias } : {}),
     authMethod: params ? params.auth.type : 'agent',
     path,
-    kind: tab.kind,
+    kind: activeTab.kind,
   }
   if (params?.auth.type === 'key') {
     bookmark.privateKeyPath = params.auth.key_path
@@ -1676,8 +1682,8 @@ watch(viewMode, () => {
   align-items: center;
   gap: 2px;
   padding: 8px 12px;
-  background: #181825;
-  border-bottom: 1px solid #2a2a3d;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
   overflow-x: auto;
   white-space: nowrap;
   flex-shrink: 0;
@@ -1692,7 +1698,7 @@ watch(viewMode, () => {
   background: none;
   border: none;
   border-radius: 4px;
-  color: #89b4fa;
+  color: var(--accent);
   cursor: pointer;
   padding: 2px 6px;
   font-size: 13px;
@@ -1700,16 +1706,16 @@ watch(viewMode, () => {
 }
 
 .crumb:hover {
-  background: #313244;
+  background: var(--surface);
 }
 
 .crumb.current {
-  color: #cdd6f4;
+  color: var(--text-primary);
   font-weight: 600;
 }
 
 .crumb-sep {
-  color: #6c7086;
+  color: var(--text-muted);
   font-size: 12px;
 }
 
@@ -1721,10 +1727,10 @@ watch(viewMode, () => {
 
 .path-input {
   flex: 1;
-  background: #11111b;
-  border: 1px solid #4f6ec2;
+  background: var(--bg-secondary);
+  border: 1px solid var(--scrollbar-thumb);
   border-radius: 5px;
-  color: #cdd6f4;
+  color: var(--text-primary);
   font-size: 13px;
   font-family: monospace;
   padding: 3px 8px;
@@ -1748,24 +1754,24 @@ watch(viewMode, () => {
 
 .filter-input {
   width: 150px;
-  background: #11111b;
-  border: 1px solid #4f6ec2;
+  background: var(--bg-secondary);
+  border: 1px solid var(--scrollbar-thumb);
   border-radius: 5px;
-  color: #cdd6f4;
+  color: var(--text-primary);
   font-size: 12px;
   padding: 3px 8px;
   outline: none;
 }
 
 .filter-input::placeholder {
-  color: #6c7086;
+  color: var(--text-muted);
 }
 
 .toggle-btn {
   background: none;
   border: none;
   border-radius: 4px;
-  color: #6c7086;
+  color: var(--text-muted);
   cursor: pointer;
   padding: 2px 8px;
   font-size: 14px;
@@ -1773,13 +1779,13 @@ watch(viewMode, () => {
 }
 
 .toggle-btn:hover {
-  background: #313244;
-  color: #cdd6f4;
+  background: var(--surface);
+  color: var(--text-primary);
 }
 
 .toggle-btn.active {
-  background: #4f6ec2;
-  color: #ffffff;
+  background: var(--scrollbar-thumb);
+  color: var(--accent-text);
 }
 
 .nav-btns {
@@ -1800,7 +1806,7 @@ watch(viewMode, () => {
 
 .nav-btn:disabled:hover {
   background: none;
-  color: #6c7086;
+  color: var(--text-muted);
 }
 
 /*
@@ -1814,13 +1820,13 @@ watch(viewMode, () => {
   display: flex;
   overflow-x: auto;
   overflow-y: hidden;
-  background: #181825;
+  background: var(--bg-secondary);
 }
 
 .columns {
   display: flex;
   flex-shrink: 0;
-  background: #181825;
+  background: var(--bg-secondary);
 }
 
 .column {
@@ -1829,10 +1835,10 @@ watch(viewMode, () => {
   height: 100%;
   overflow-y: auto;
   overflow-x: hidden;
-  border-right: 1px solid #2a2a3d;
+  border-right: 1px solid var(--border);
   flex-shrink: 0;
   padding: 6px 0;
-  background: #1e1e2e;
+  background: var(--bg-primary);
 }
 
 .entry {
@@ -1844,41 +1850,41 @@ watch(viewMode, () => {
   cursor: pointer;
   border-radius: 5px;
   margin: 1px 6px;
-  color: #cdd6f4;
+  color: var(--text-primary);
   transition: background 0.08s;
   user-select: none;
 }
 
 .entry:hover {
-  background: #28283c;
+  background: var(--bg-hover);
 }
 
 /* Active selection: Finder-style accent */
 .entry.selected {
-  background: #4f6ec2;
-  color: #ffffff;
+  background: var(--scrollbar-thumb);
+  color: var(--accent-text);
 }
 
 .entry.selected .entry-size,
 .entry.selected .entry-arrow {
-  color: #c8d4f5;
+  color: var(--text-secondary);
 }
 
 .entry.drop-target,
 .file-row.drop-target {
-  background: #2c3a5c;
-  outline: 1px dashed #89b4fa;
+  background: var(--bg-selected);
+  outline: 1px dashed var(--accent);
   outline-offset: -2px;
 }
 
 /* Ancestor columns on the opened path: muted highlight */
 .entry.opened:not(.selected) {
-  background: #313244;
-  color: #cdd6f4;
+  background: var(--surface);
+  color: var(--text-primary);
 }
 
 .entry.opened:not(.selected) .entry-arrow {
-  color: #89b4fa;
+  color: var(--accent);
 }
 
 .entry-icon {
@@ -1894,13 +1900,13 @@ watch(viewMode, () => {
 }
 
 .entry-size {
-  color: #6c7086;
+  color: var(--text-muted);
   font-size: calc(11px * var(--row-scale));
   flex-shrink: 0;
 }
 
 .entry-arrow {
-  color: #6c7086;
+  color: var(--text-muted);
   font-size: calc(12px * var(--row-scale));
   flex-shrink: 0;
 }
@@ -1911,7 +1917,7 @@ watch(viewMode, () => {
   align-items: center;
   justify-content: center;
   height: calc(60px * var(--row-scale));
-  color: #6c7086;
+  color: var(--text-muted);
   font-size: calc(12px * var(--row-scale));
 }
 
@@ -1920,7 +1926,7 @@ watch(viewMode, () => {
   flex: 1;
   min-width: 0;
   overflow: auto;
-  background: #1e1e2e;
+  background: var(--bg-primary);
 }
 
 .file-header,
@@ -1934,14 +1940,14 @@ watch(viewMode, () => {
 }
 
 .file-header {
-  background: #181825;
-  color: #6c7086;
+  background: var(--bg-secondary);
+  color: var(--text-muted);
   font-size: calc(12px * var(--row-scale));
   font-weight: 600;
   position: sticky;
   top: 0;
   z-index: 1;
-  border-bottom: 1px solid #2a2a3d;
+  border-bottom: 1px solid var(--border);
   user-select: none;
 }
 
@@ -1996,21 +2002,21 @@ watch(viewMode, () => {
   right: 0;
   width: 1px;
   height: 70%;
-  background: #2a2a3d;
+  background: var(--border);
 }
 
 .grip:hover::after,
 .grip.active::after {
-  background: #89b4fa;
+  background: var(--accent);
   width: 2px;
 }
 
 .file-header .sort-btn:hover {
-  color: #cdd6f4;
+  color: var(--text-primary);
 }
 
 .file-header .sort-btn.active {
-  color: #89b4fa;
+  color: var(--accent);
 }
 
 .sort-arrow {
@@ -2020,24 +2026,24 @@ watch(viewMode, () => {
 
 .file-row {
   cursor: pointer;
-  color: #cdd6f4;
+  color: var(--text-primary);
   transition: background 0.08s;
   user-select: none;
 }
 
 .file-row:hover {
-  background: #28283c;
+  background: var(--bg-hover);
 }
 
 .file-row.selected {
-  background: #4f6ec2;
-  color: #ffffff;
+  background: var(--scrollbar-thumb);
+  color: var(--accent-text);
 }
 
 .file-row.selected .col-size,
 .file-row.selected .col-perm,
 .file-row.selected .col-date {
-  color: #c8d4f5;
+  color: var(--text-secondary);
 }
 
 .col-name {
@@ -2052,7 +2058,7 @@ watch(viewMode, () => {
 .col-size,
 .col-perm,
 .col-date {
-  color: #6c7086;
+  color: var(--text-muted);
   font-size: calc(12px * var(--row-scale));
 }
 
@@ -2064,8 +2070,8 @@ watch(viewMode, () => {
   width: 340px;
   height: 100%;
   overflow-y: auto;
-  background: #1e1e2e;
-  border-left: 1px solid #2a2a3d;
+  background: var(--bg-primary);
+  border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
@@ -2102,15 +2108,15 @@ watch(viewMode, () => {
   display: flex;
   overflow: hidden;
   position: relative;
-  background: #11111b;
+  background: var(--bg-secondary);
 }
 
 .editor-gutter {
   flex-shrink: 0;
   overflow: hidden;
   padding: 12px 0 12px 0;
-  background: #11111b;
-  border-right: 1px solid #2a2a3d;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
 }
 
 .code-ln {
@@ -2118,7 +2124,7 @@ watch(viewMode, () => {
   box-sizing: border-box;
   padding: 0 10px 0 8px;
   text-align: right;
-  color: #6c7086;
+  color: var(--text-muted);
   user-select: none;
 }
 
@@ -2126,8 +2132,8 @@ watch(viewMode, () => {
   flex: 1;
   margin: 0;
   padding: 12px 14px 12px 10px;
-  color: #cdd6f4;
-  background: #11111b;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
   border: none;
   outline: none;
   resize: none;
@@ -2155,7 +2161,7 @@ watch(viewMode, () => {
   align-items: center;
   gap: 10px;
   padding: 12px 14px;
-  border-bottom: 1px solid #2a2a3d;
+  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 
@@ -2170,7 +2176,7 @@ watch(viewMode, () => {
 .preview-name {
   font-size: 13px;
   font-weight: 600;
-  color: #cdd6f4;
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2178,7 +2184,7 @@ watch(viewMode, () => {
 
 .preview-info {
   font-size: 11px;
-  color: #6c7086;
+  color: var(--text-muted);
   margin-top: 2px;
 }
 
@@ -2186,7 +2192,7 @@ watch(viewMode, () => {
   flex: 1;
   margin: 0;
   padding: 12px 0;
-  color: #cdd6f4;
+  color: var(--text-primary);
   overflow-y: auto;
 }
 
@@ -2205,7 +2211,7 @@ watch(viewMode, () => {
 
 .preview-status {
   padding: 14px;
-  color: #6c7086;
+  color: var(--text-muted);
   font-size: 12px;
   text-align: center;
 }
@@ -2213,23 +2219,23 @@ watch(viewMode, () => {
 .preview-load-full {
   margin-left: 8px;
   padding: 3px 10px;
-  background: #313244;
-  color: #cdd6f4;
-  border: 1px solid #45475a;
+  background: var(--surface);
+  color: var(--text-primary);
+  border: 1px solid var(--text-disabled);
   border-radius: 4px;
   font-size: 12px;
   cursor: pointer;
 }
 
 .preview-load-full:hover {
-  background: #45475a;
+  background: var(--text-disabled);
 }
 
 .drop-overlay {
   position: absolute;
   inset: 0;
-  background: rgba(137, 180, 250, 0.1);
-  border: 2px dashed #89b4fa;
+  background: var(--accent-alpha);
+  border: 2px dashed var(--accent);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2239,23 +2245,23 @@ watch(viewMode, () => {
 
 .drop-overlay p {
   font-size: 16px;
-  color: #89b4fa;
+  color: var(--accent);
   font-weight: 600;
 }
 
 .remote-panel.drag-over {
-  border: 2px solid #89b4fa;
+  border: 2px solid var(--accent);
 }
 
 .ctx-menu {
   position: fixed;
   z-index: 100;
   min-width: 160px;
-  background: #24243a;
-  border: 1px solid #45475a;
+  background: var(--bg-panel);
+  border: 1px solid var(--text-disabled);
   border-radius: 6px;
   padding: 4px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 4px 16px var(--shadow-sm);
   display: flex;
   flex-direction: column;
 }
@@ -2266,7 +2272,7 @@ watch(viewMode, () => {
   text-align: left;
   background: none;
   border: none;
-  color: #cdd6f4;
+  color: var(--text-primary);
   font-size: 13px;
   padding: 6px 10px;
   border-radius: 4px;
@@ -2274,11 +2280,11 @@ watch(viewMode, () => {
 }
 
 .ctx-item:hover:not(:disabled) {
-  background: #45475a;
+  background: var(--text-disabled);
 }
 
 .ctx-item.ctx-danger {
-  color: #f38ba8;
+  color: var(--error);
 }
 
 .ctx-item:disabled {

@@ -200,7 +200,7 @@ async function remove(bm: Bookmark) {
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -208,8 +208,8 @@ async function remove(bm: Bookmark) {
 }
 
 .dialog {
-  background: #1e1e2e;
-  border: 1px solid #45475a;
+  background: var(--bg-primary);
+  border: 1px solid var(--text-disabled);
   border-radius: 8px;
   padding: 24px;
   width: 520px;
@@ -221,12 +221,12 @@ async function remove(bm: Bookmark) {
 h2 {
   margin-bottom: 16px;
   font-size: 16px;
-  color: #cdd6f4;
+  color: var(--text-primary);
 }
 
 .empty {
   padding: 24px 0;
-  color: #6c7086;
+  color: var(--text-muted);
   font-size: 13px;
   text-align: center;
 }
@@ -244,19 +244,19 @@ h2 {
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  background: #2a2a40;
-  border: 1px solid #313244;
+  background: var(--border);
+  border: 1px solid var(--border);
   border-radius: 6px;
   cursor: pointer;
   user-select: none;
 }
 
 .server-row:hover {
-  border-color: #45475a;
+  border-color: var(--text-disabled);
 }
 
 .server-toggle {
-  color: #a6adc8;
+  color: var(--text-secondary);
   font-size: 11px;
   width: 12px;
   flex-shrink: 0;
@@ -265,7 +265,7 @@ h2 {
 .server-label {
   flex: 1;
   min-width: 0;
-  color: #cdd6f4;
+  color: var(--text-primary);
   font-weight: 600;
   font-size: 13px;
   overflow: hidden;
@@ -274,9 +274,9 @@ h2 {
 }
 
 .server-count {
-  color: #6c7086;
+  color: var(--text-muted);
   font-size: 11px;
-  background: #313244;
+  background: var(--surface);
   border-radius: 8px;
   padding: 1px 8px;
   flex-shrink: 0;
@@ -288,13 +288,13 @@ h2 {
   gap: 10px;
   padding: 6px 10px;
   margin-left: 22px;
-  background: #24243a;
-  border: 1px solid #313244;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
   border-radius: 6px;
 }
 
 .item:hover {
-  border-color: #45475a;
+  border-color: var(--text-disabled);
 }
 
 .info {
@@ -304,7 +304,7 @@ h2 {
 }
 
 .alias {
-  color: #89b4fa;
+  color: var(--accent);
   font-weight: 600;
   font-size: 13px;
   overflow: hidden;
@@ -313,7 +313,7 @@ h2 {
 }
 
 .kind-icon {
-  color: #a6adc8;
+  color: var(--text-secondary);
   font-size: 11px;
   margin-right: 2px;
 }
@@ -328,12 +328,12 @@ h2 {
 }
 
 .remote {
-  color: #a6adc8;
+  color: var(--text-secondary);
   flex-shrink: 0;
 }
 
 .path {
-  color: #6c7086;
+  color: var(--text-muted);
   font-family: monospace;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -348,9 +348,9 @@ h2 {
 .error {
   margin-top: 12px;
   padding: 8px;
-  background: #45475a;
-  border-left: 3px solid #f38ba8;
-  color: #f38ba8;
+  background: var(--text-disabled);
+  border-left: 3px solid var(--error);
+  color: var(--error);
   font-size: 12px;
   border-radius: 4px;
 }
@@ -366,31 +366,31 @@ h2 {
   border-radius: 4px;
   font-size: 12px;
   cursor: pointer;
-  border: 1px solid #45475a;
+  border: 1px solid var(--text-disabled);
 }
 
 .btn.cancel {
-  background: #313244;
-  color: #cdd6f4;
+  background: var(--surface);
+  color: var(--text-primary);
 }
 
 .btn.primary {
-  background: #89b4fa;
-  color: #1e1e2e;
-  border-color: #89b4fa;
+  background: var(--accent);
+  color: var(--bg-primary);
+  border-color: var(--accent);
 }
 
 .btn.primary:hover {
-  background: #74c7ec;
+  background: var(--accent-hover);
 }
 
 .btn.danger {
-  background: #313244;
-  color: #f38ba8;
+  background: var(--surface);
+  color: var(--error);
 }
 
 .btn.danger:hover {
-  background: #45475a;
+  background: var(--text-disabled);
 }
 
 .btn:disabled {
