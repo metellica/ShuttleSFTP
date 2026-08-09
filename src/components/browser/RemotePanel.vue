@@ -39,6 +39,7 @@ const selectedPaths = ref<Set<string>>(new Set())
 /** Anchor for shift+click range selection (colIndex is null in list view). */
 const selectionAnchor = ref<{ colIndex: number | null; path: string } | null>(null)
 const bodyEl = ref<HTMLElement | null>(null)
+const listViewEl = ref<HTMLElement | null>(null)
 
 type ViewMode = 'columns' | 'list'
 const viewMode = ref<ViewMode>(
@@ -316,6 +317,36 @@ const previewCtxMenu = ref<{ visible: boolean; x: number; y: number; hasSelectio
 const currentPath = computed(() => tab.value?.currentPath || '/')
 const sessionId = computed(() => tab.value?.sessionId || '')
 
+/** Parent directory path, or null when at root. */
+const parentPath = computed(() => {
+  const p = currentPath.value
+  if (p === '/') return null
+  const idx = p.lastIndexOf('/')
+  return idx === 0 ? '/' : p.slice(0, idx)
+})
+
+/** True when `parent` is the immediate parent directory of `child`. */
+function isDirectChildOf(parent: string, child: string): boolean {
+  const np = parent.replace(/\/+$/, '') || '/'
+  const nc = child.replace(/\/+$/, '') || '/'
+  const sep = nc.lastIndexOf('/')
+  if (sep === 0) return np === '/'
+  return nc.slice(0, sep) === np
+}
+
+/** Synthetic ".." entry for the list view, so the user can double-click up. */
+const parentEntry = computed<FileEntry | null>(() => {
+  if (parentPath.value === null) return null
+  return {
+    name: '..',
+    path: parentPath.value,
+    isDir: true,
+    size: 0,
+    modified: 0,
+    permissions: null,
+  }
+})
+
 // Editable path bar state
 const pathEdit = ref<{ active: boolean; value: string }>({ active: false, value: '' })
 const pathInputEl = ref<HTMLInputElement | null>(null)
@@ -518,6 +549,44 @@ async function loadList(path: string) {
     listLoading.value = false
   }
 }
+
+/**
+ * Auto-select the ".." row or the child folder we navigated up from.
+ * Only applies to list view; in column view the parent is always visible.
+ *
+ * Called from a watch on listEntries — the same pattern ShuttleFiles uses
+ * (watch props.entries → auto-select) — so the DOM is already showing the
+ * new rows by the time `nextTick` fires.
+ */
+function autoSelectInList() {
+  if (viewMode.value !== 'list' || listLoading.value) return
+  selectedPaths.value.clear()
+  selectionAnchor.value = null
+
+  if (focusPath.value && listEntries.value.some((e) => e.path === focusPath.value)) {
+    selectedPaths.value = new Set([focusPath.value])
+    selectionAnchor.value = { colIndex: null, path: focusPath.value }
+  } else if (parentPath.value) {
+    selectedPaths.value = new Set([parentPath.value])
+    selectionAnchor.value = { colIndex: null, path: parentPath.value }
+  }
+
+  nextTick(() => {
+    const container = listViewEl.value
+    const row = container?.querySelector('.file-row.selected') as HTMLElement | null
+    if (!container || !row) return
+    const cRect = container.getBoundingClientRect()
+    const rRect = row.getBoundingClientRect()
+    const offset = rRect.top - cRect.top + container.scrollTop
+    const center = offset - cRect.height / 2 + rRect.height / 2
+    container.scrollTo({ top: Math.max(0, center), behavior: 'auto' })
+  })
+}
+
+// Mirror ShuttleFiles: react to the data that drives the template, not a
+// manual call inside loadList.  listLoading guards against the first
+// (empty) fire from the currentPath → clear → loadList cascade.
+watch(listEntries, () => autoSelectInList())
 
 async function refresh() {
   if (viewMode.value === 'columns') {
@@ -1091,6 +1160,11 @@ async function ctxAddBookmark() {
 let unlistenDragDrop: (() => void) | null = null
 let suppressWatch = false
 
+/** Previous path, used to detect "go up" navigation for auto-focus. */
+const prevPath = ref<string | null>(null)
+/** Path to auto-select after loading — the child folder when going up. */
+const focusPath = ref<string | null>(null)
+
 /** Alt+←/→ and mouse back/forward buttons navigate history. */
 function onNavKeydown(e: KeyboardEvent) {
   if (!e.altKey) return
@@ -1225,11 +1299,19 @@ onUnmounted(() => {
 
 watch(
   currentPath,
-  (newPath) => {
+  (newPath, oldPath) => {
     if (suppressWatch) {
       suppressWatch = false
       return
     }
+    // Detect "go up" navigation: auto-select the child folder we left.
+    if (oldPath && isDirectChildOf(newPath, oldPath)) {
+      focusPath.value = oldPath
+    } else {
+      focusPath.value = null
+    }
+    prevPath.value = newPath
+
     selectedPaths.value.clear()
     selectionAnchor.value = null
     preview.value = { entry: null, loading: false, data: null }
@@ -1403,6 +1485,7 @@ watch(viewMode, () => {
         v-else
         v-show="!previewMaximized"
         class="list-view"
+        ref="listViewEl"
         @click.self="onBlankClick"
         @contextmenu.self.prevent="onBlankContextMenu(currentPath, $event)"
       >
@@ -1473,6 +1556,22 @@ watch(viewMode, () => {
                 @dblclick.stop="viewSettings.resetColumnWidth('modified')"
               />
             </div>
+          </div>
+          <!-- ".." parent row for quick navigation back up -->
+          <div
+            v-if="parentEntry && !filterActive"
+            class="file-row parent-row"
+            :style="rowStyle"
+            :class="{ selected: selectedPaths.has(parentEntry.path) }"
+            @dblclick="navigateTo(parentEntry.path)"
+          >
+            <span class="col-name">
+              <span class="entry-icon">📁</span>
+              ..
+            </span>
+            <span class="col-size" />
+            <span class="col-perm" />
+            <span class="col-date" />
           </div>
           <div
             v-for="entry in visibleListEntries"
@@ -1927,6 +2026,7 @@ watch(viewMode, () => {
   min-width: 0;
   overflow: auto;
   background: var(--bg-primary);
+  position: relative;
 }
 
 .file-header,
