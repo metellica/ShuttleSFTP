@@ -959,29 +959,17 @@ async function pasteClipboardInto(destDir: string) {
   }
 }
 
-/** The single selected directory, if the current selection is exactly one folder. */
-function singleSelectedDir(): string | null {
-  const sel = selectedFiles.value
-  const only = sel.length === 1 ? sel[0] : undefined
-  return only?.isDir ? only.path : null
-}
-
-/** Paste into the right-clicked folder, else the selected/focused folder, else the blank dir/current directory. */
+/** Paste always targets the currently browsed directory, regardless of
+ *  what's selected or right-clicked — matching standard file manager UX. */
 async function ctxPasteFiles() {
-  const entry = ctxMenu.value.entry
-  const blankDir = ctxMenu.value.dir
   hideCtxMenu()
-  const destDir = entry?.isDir ? entry.path : singleSelectedDir() ?? blankDir ?? currentPath.value
-  await pasteClipboardInto(destDir)
+  await pasteClipboardInto(currentPath.value)
 }
 
 /** Name of the folder Paste would target, for the menu label. */
-const pasteTargetName = computed(() => {
-  const entry = ctxMenu.value.entry
-  if (entry?.isDir) return entry.name
-  const dir = singleSelectedDir() ?? ctxMenu.value.dir ?? currentPath.value
-  return dir.split('/').filter(Boolean).pop() ?? '/'
-})
+const pasteTargetName = computed(() =>
+  currentPath.value.split('/').filter(Boolean).pop() ?? '/'
+)
 
 /** New folder inside the blank-clicked directory. */
 async function ctxNewFolder() {
@@ -1257,9 +1245,7 @@ function onClipboardKeydown(e: KeyboardEvent) {
   } else {
     if (!clipboard.sessionId || clipboard.paths.length === 0) return
     e.preventDefault()
-    // Paste into the selected folder when exactly one folder is selected
-    const dest = singleSelectedDir() ?? currentPath.value
-    pasteClipboardInto(dest)
+    pasteClipboardInto(currentPath.value)
   }
 }
 
