@@ -8,7 +8,7 @@ import { useClipboardStore } from '@/stores/clipboard'
 import { usePrepareStore } from '@/stores/prepare'
 import { useViewSettingsStore, COLUMN_KEYS, type ColumnKey } from '@/stores/viewSettings'
 import DensityControl from '@/components/layout/DensityControl.vue'
-import { listDir, mkDir, uploadFiles, downloadFiles, downloadFileAs, previewFile, saveFileContent, saveBookmark, removeEntry, transferRemote } from '@/composables/useTauri'
+import { listDir, mkDir, uploadFiles, downloadFiles, downloadFileAs, previewFile, saveFileContent, saveBookmark, removeEntry, renameEntry, transferRemote } from '@/composables/useTauri'
 import { promptText } from '@/composables/usePrompt'
 import type { FileEntry, FilePreview } from '@/types/filesystem'
 import type { Bookmark } from '@/types/connection'
@@ -998,6 +998,52 @@ function ctxRefresh() {
   refresh()
 }
 
+/** Rename a single entry in place (works for both local and remote sessions). */
+async function renameFile(entry: FileEntry) {
+  const sid = sessionId.value
+  if (!sid) return
+
+  const name = await promptText('Rename to:', { defaultValue: entry.name })
+  const trimmed = name?.trim()
+  if (!trimmed || trimmed === entry.name) return
+
+  const parentPath = entry.path.slice(0, entry.path.length - entry.name.length).replace(/\/+$/, '')
+  const newPath = parentPath ? `${parentPath}/${trimmed}` : `/${trimmed}`
+
+  try {
+    await renameEntry(sid, entry.path, newPath)
+    if (preview.value.entry?.path === entry.path) {
+      preview.value = { entry: null, loading: false, data: null }
+      previewEdit.value = { active: false, text: '', saving: false }
+    }
+    selectedPaths.value.clear()
+    selectedPaths.value.add(newPath)
+    selectionAnchor.value = null
+  } catch (e) {
+    console.error('Rename failed:', e)
+    await message(`Rename failed: ${e}`, { title: 'Rename', kind: 'error' })
+  }
+  await refresh()
+}
+
+function ctxRename() {
+  const entry = ctxMenu.value.entry
+  hideCtxMenu()
+  if (entry) renameFile(entry)
+}
+
+/** F2 renames the single selected entry, matching desktop file manager conventions. */
+function onRenameKeydown(e: KeyboardEvent) {
+  if (e.key !== 'F2') return
+  const t = e.target as HTMLElement | null
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+  const sel = selectedFiles.value
+  const only = sel.length === 1 ? sel[0] : undefined
+  if (!only) return
+  e.preventDefault()
+  renameFile(only)
+}
+
 /** Drag files out of the panel: payload consumed by tabs (cross-session copy). */
 function onEntryDragStart(entry: FileEntry, event: DragEvent) {
   if (!selectedPaths.value.has(entry.path)) {
@@ -1259,6 +1305,7 @@ onMounted(async () => {
   window.addEventListener('keydown', onClipboardKeydown)
   window.addEventListener('keydown', onFilterKeydown)
   window.addEventListener('keydown', onZoomKeydown)
+  window.addEventListener('keydown', onRenameKeydown)
   window.addEventListener('mouseup', onNavMouseUp)
   // Registered by hand: a passive listener could not call preventDefault,
   // and the browser would zoom the whole page instead.
@@ -1292,6 +1339,7 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onClipboardKeydown)
   window.removeEventListener('keydown', onFilterKeydown)
   window.removeEventListener('keydown', onZoomKeydown)
+  window.removeEventListener('keydown', onRenameKeydown)
   window.removeEventListener('mouseup', onNavMouseUp)
   bodyEl.value?.removeEventListener('wheel', onZoomWheel)
   unlistenDragDrop?.()
@@ -1726,6 +1774,9 @@ watch(viewMode, () => {
         <button class="ctx-item" @click="ctxRefresh">🔄 Refresh</button>
       </template>
       <template v-if="ctxMenu.entry">
+      <button class="ctx-item" :disabled="selectedFiles.length > 1" @click="ctxRename">
+        ✏️ Rename…
+      </button>
       <button class="ctx-item" @click="ctxAddBookmark">
         ⭐ Add Bookmark{{ ctxMenu.entry && !ctxMenu.entry.isDir ? ' (folder)' : '' }}
       </button>
