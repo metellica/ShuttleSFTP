@@ -18,6 +18,10 @@
     "dialog:allow-confirm",
     "fs:read-all",
     "fs:write-all",
+    {
+      "identifier": "fs:scope",
+      "allow": [{ "path": "**" }]
+    },
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text"
   ]

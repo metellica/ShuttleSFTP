@@ -2,7 +2,7 @@ import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import { cancelPrepare } from '@/composables/useTauri'
 
-export type PreparePhase = 'scanning' | 'queueing' | 'deleting'
+export type PreparePhase = 'scanning' | 'queueing' | 'deleting' | 'downloading'
 
 export interface PrepareProgressEvent {
   prepareId: string

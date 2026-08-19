@@ -69,7 +69,7 @@ export const useTransferStore = defineStore('transfer', () => {
 
   async function clearCompleted() {
     _tasks.value = _tasks.value.filter(
-      (t) => t.status !== 'completed' && t.status !== 'cancelled'
+      (t) => t.status !== 'completed' && t.status !== 'cancelled' && t.status !== 'failed'
     )
     reindex()
     version.value++

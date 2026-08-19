@@ -787,14 +787,14 @@ impl TransferEngine {
         tasks.get(task_id).cloned()
     }
 
-    /// Remove completed and cancelled tasks from the queue.
+    /// Remove completed, cancelled and failed tasks from the queue.
     pub async fn clear_finished(&self) -> AppResult<()> {
         {
             let mut tasks = self.tasks.lock().await;
             tasks.retain(|_, t| {
                 !matches!(
                     t.status,
-                    TransferStatus::Completed | TransferStatus::Cancelled
+                    TransferStatus::Completed | TransferStatus::Cancelled | TransferStatus::Failed
                 )
             });
         }

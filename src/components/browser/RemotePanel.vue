@@ -9,7 +9,10 @@ import { usePrepareStore } from '@/stores/prepare'
 import { useViewSettingsStore, COLUMN_KEYS, type ColumnKey } from '@/stores/viewSettings'
 import DensityControl from '@/components/layout/DensityControl.vue'
 import { listDir, mkDir, uploadFiles, downloadFiles, downloadFileAs, previewFile, saveFileContent, saveBookmark, removeEntry, renameEntry, transferRemote } from '@/composables/useTauri'
+import type { PasteSource } from '@/stores/clipboard'
 import { promptText } from '@/composables/usePrompt'
+import { confirmOverwrite, toMeta, type OverwriteConflict, type OverwriteMeta } from '@/composables/useConfirmOverwrite'
+import { stat as statLocalFile } from '@tauri-apps/plugin-fs'
 import type { FileEntry, FilePreview } from '@/types/filesystem'
 import type { Bookmark } from '@/types/connection'
 
@@ -835,6 +838,7 @@ function onListContextMenu(entry: FileEntry, event: MouseEvent) {
     selectedPaths.value.add(entry.path)
   }
   ctxMenu.value = { visible: true, x: event.clientX, y: event.clientY, entry, dir: null }
+  void clipboard.refreshHasContent()
 }
 
 // Context menu
@@ -847,12 +851,14 @@ function onEntryContextMenu(colIndex: number, entry: FileEntry, event: MouseEven
     if (col) col.selectedPath = entry.path
   }
   ctxMenu.value = { visible: true, x: event.clientX, y: event.clientY, entry, dir: null }
+  void clipboard.refreshHasContent()
 }
 
 /** Right-click on the blank area of a column / the list: dir-level menu. */
 function onBlankContextMenu(dir: string, event: MouseEvent) {
   previewCtxMenu.value.visible = false
   ctxMenu.value = { visible: true, x: event.clientX, y: event.clientY, entry: null, dir }
+  void clipboard.refreshHasContent()
 }
 
 /** Left-click on blank space clears the selection. */
@@ -932,12 +938,13 @@ function entryIcon(e: FileEntry): string {
   return e.isDir ? '📁' : '📄'
 }
 
-/** Mark the selection for a later Paste (in any session). */
+/** Mark the selection for a later Paste (in any session, and — where
+ *  supported — in Explorer or any other app via the system clipboard). */
 function copyFilesToClipboard() {
   const sid = sessionId.value
   const targets = selectedFiles.value.map((f) => f.path)
   if (!sid || targets.length === 0) return
-  clipboard.set(sid, targets, tab.value?.label ?? '')
+  void clipboard.copyFiles(sid, targets, tab.value?.label ?? '')
 }
 
 function ctxCopyFiles() {
@@ -945,13 +952,142 @@ function ctxCopyFiles() {
   copyFilesToClipboard()
 }
 
+/** Base name of a path, tolerating both '/' (remote/local-unix) and
+ *  '\' (Windows system-clipboard paths) separators. */
+function baseName(p: string): string {
+  return p.split(/[/\\]/).filter(Boolean).pop() ?? p
+}
+
+/** Entries already at `destDir` (on session `sid`) whose name matches
+ *  one of `incomingNames` — i.e. what a paste/drop there would clobber.
+ *  Best-effort: an unreadable destination is treated as "no conflicts". */
+async function findConflicts(
+  sid: string,
+  destDir: string,
+  incomingNames: string[]
+): Promise<FileEntry[]> {
+  const names = new Set(incomingNames)
+  try {
+    const destEntries = await listDir(sid, destDir)
+    return destEntries.filter((e) => names.has(e.name))
+  } catch {
+    return []
+  }
+}
+
+/** Source-side description of an incoming paste/drop, used to look up
+ *  each conflicting file's own meta info (for the "Source" side of the
+ *  overwrite dialog): either remote paths on another (or the same)
+ *  session, or raw local paths from the OS clipboard/Explorer. */
+type SourceRef =
+  | { kind: 'remote'; sessionId: string; paths: string[] }
+  | { kind: 'local'; paths: string[] }
+
+/** Best-effort meta for each of `paths` on session `sid`, grouping by
+ *  parent directory to minimize listDir calls (mirrors findConflicts'
+ *  destination-side lookup, but keyed by full incoming path rather
+ *  than by dest name). Misses are simply absent from the result map. */
+async function statRemotePaths(sid: string, paths: string[]): Promise<Map<string, OverwriteMeta>> {
+  const byDir = new Map<string, string[]>()
+  for (const p of paths) {
+    const dir = p.slice(0, p.lastIndexOf('/')) || '/'
+    const list = byDir.get(dir) ?? []
+    list.push(baseName(p))
+    byDir.set(dir, list)
+  }
+  const result = new Map<string, OverwriteMeta>()
+  await Promise.all(
+    Array.from(byDir.entries()).map(async ([dir, names]) => {
+      try {
+        const entries = await listDir(sid, dir)
+        const nameSet = new Set(names)
+        for (const e of entries) {
+          if (nameSet.has(e.name)) result.set(e.name, toMeta(e))
+        }
+      } catch {
+        // best-effort: leave these names unresolved
+      }
+    })
+  )
+  return result
+}
+
+/** Best-effort meta for each of `paths` on the local filesystem (OS
+ *  clipboard / Explorer drag-drop sources), via the local-fs plugin —
+ *  no backend/session involved since these aren't tied to a tab. */
+async function statLocalPaths(paths: string[]): Promise<Map<string, OverwriteMeta>> {
+  const result = new Map<string, OverwriteMeta>()
+  await Promise.all(
+    paths.map(async (p) => {
+      try {
+        const info = await statLocalFile(p)
+        result.set(baseName(p), {
+          name: baseName(p),
+          size: info.size,
+          modified: info.mtime ? Math.floor(info.mtime.getTime() / 1000) : 0,
+          isDir: info.isDirectory,
+        })
+      } catch {
+        // best-effort: leave unresolved
+      }
+    })
+  )
+  return result
+}
+
+/** Prompts to overwrite when any incoming name already exists at
+ *  `destDir`. Returns the subset of `paths` to actually proceed with
+ *  (all of them on overwrite/no-conflict, the non-conflicting ones on
+ *  skip, or none — signalling cancel — on cancel). `source` describes
+ *  where the incoming files come from, used to fetch their own meta
+ *  info for the dialog's "Source" column. */
+async function resolveOverwrite(
+  sid: string,
+  destDir: string,
+  paths: string[],
+  source: SourceRef
+): Promise<string[] | null> {
+  const destEntries = await findConflicts(sid, destDir, paths.map(baseName))
+  if (destEntries.length === 0) return paths
+  const conflictNames = new Set(destEntries.map((e) => e.name))
+  const sourcePaths = paths.filter((p) => conflictNames.has(baseName(p)))
+  const sourceMeta =
+    source.kind === 'remote'
+      ? await statRemotePaths(source.sessionId, sourcePaths)
+      : await statLocalPaths(sourcePaths)
+  const conflicts: OverwriteConflict[] = destEntries.map((e) => ({
+    name: e.name,
+    dest: toMeta(e),
+    source: sourceMeta.get(e.name) ?? null,
+  }))
+  const choice = await confirmOverwrite(conflicts)
+  if (choice === 'cancel') return null
+  if (choice === 'overwrite') return paths
+  return paths.filter((p) => !conflictNames.has(baseName(p)))
+}
+
 async function pasteClipboardInto(destDir: string) {
   const sid = sessionId.value
-  if (!sid || !clipboard.sessionId || clipboard.paths.length === 0) return
+  if (!sid) return
+  const source: PasteSource | null = await clipboard.resolvePasteSource()
+  if (!source) return
+  const sourceRef =
+    source.kind === 'system'
+      ? ({ kind: 'local', paths: source.paths } as const)
+      : ({ kind: 'remote', sessionId: source.sessionId, paths: source.paths } as const)
+  const paths = await resolveOverwrite(sid, destDir, source.paths, sourceRef)
+  if (!paths) return
+  if (paths.length === 0) return
   try {
-    await prepareStore.run('Preparing copy', (pid) =>
-      transferRemote(clipboard.sessionId!, [...clipboard.paths], sid, destDir, pid)
-    )
+    if (source.kind === 'system') {
+      await prepareStore.run('Preparing paste', (pid) =>
+        uploadFiles(sid, paths, destDir, pid)
+      )
+    } else {
+      await prepareStore.run('Preparing copy', (pid) =>
+        transferRemote(source.sessionId, paths, sid, destDir, pid)
+      )
+    }
     await transferStore.syncTasks()
   } catch (e) {
     console.error('Paste failed:', e)
@@ -969,6 +1105,18 @@ async function ctxPasteFiles() {
 /** Name of the folder Paste would target, for the menu label. */
 const pasteTargetName = computed(() =>
   currentPath.value.split('/').filter(Boolean).pop() ?? '/'
+)
+
+/** Whether Paste has anything to act on. Reflects `clipboard.active` as
+ *  of the last `refreshHasContent()` call (context menu open). */
+const canPaste = computed(() => clipboard.pasteCount > 0)
+
+const pasteTitle = computed(() =>
+  clipboard.active?.kind === 'system'
+    ? 'From the system clipboard'
+    : clipboard.sourceLabel
+      ? `From ${clipboard.sourceLabel}`
+      : ''
 )
 
 /** New folder inside the blank-clicked directory. */
@@ -1081,8 +1229,14 @@ async function onEntryDrop(entry: FileEntry, event: DragEvent) {
     if (!payload.sessionId || payload.paths.length === 0) return
     // Ignore dropping something onto itself
     if (payload.sessionId === sessionId.value && payload.paths.includes(entry.path)) return
+    const paths = await resolveOverwrite(sessionId.value, entry.path, payload.paths, {
+      kind: 'remote',
+      sessionId: payload.sessionId,
+      paths: payload.paths,
+    })
+    if (!paths || paths.length === 0) return
     await prepareStore.run('Preparing copy', (pid) =>
-      transferRemote(payload.sessionId, payload.paths, sessionId.value, entry.path, pid)
+      transferRemote(payload.sessionId, paths, sessionId.value, entry.path, pid)
     )
     await transferStore.syncTasks()
   } catch (e) {
@@ -1243,9 +1397,8 @@ function onClipboardKeydown(e: KeyboardEvent) {
     e.preventDefault()
     copyFilesToClipboard()
   } else {
-    if (!clipboard.sessionId || clipboard.paths.length === 0) return
     e.preventDefault()
-    pasteClipboardInto(currentPath.value)
+    void pasteClipboardInto(currentPath.value)
   }
 }
 
@@ -1311,8 +1464,13 @@ onMounted(async () => {
       const paths = event.payload.paths
       if (paths.length > 0 && sessionId.value) {
         try {
+          const toUpload = await resolveOverwrite(sessionId.value, currentPath.value, paths, {
+            kind: 'local',
+            paths,
+          })
+          if (!toUpload || toUpload.length === 0) return
           await prepareStore.run('Preparing upload', (pid) =>
-            uploadFiles(sessionId.value, paths, currentPath.value, pid)
+            uploadFiles(sessionId.value, toUpload, currentPath.value, pid)
           )
           await transferStore.syncTasks()
         } catch (e) {
@@ -1754,11 +1912,11 @@ watch(viewMode, () => {
       </template>
       <button
         class="ctx-item"
-        :disabled="!clipboard.sessionId || clipboard.paths.length === 0"
-        :title="clipboard.sourceLabel ? `From ${clipboard.sourceLabel}` : ''"
+        :disabled="!canPaste"
+        :title="pasteTitle"
         @click="ctxPasteFiles"
       >
-        📥 Paste{{ clipboard.paths.length ? ` (${clipboard.paths.length})` : '' }} into “{{ pasteTargetName }}”
+        📥 Paste{{ clipboard.pasteCount ? ` (${clipboard.pasteCount})` : '' }} into “{{ pasteTargetName }}”
       </button>
       <template v-if="!ctxMenu.entry">
         <button class="ctx-item" @click="ctxNewFolder">📁 New Folder…</button>

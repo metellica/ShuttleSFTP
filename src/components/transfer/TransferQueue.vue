@@ -462,7 +462,7 @@ async function onShowInFolder(path: string | null) {
         <button v-if="hasRunning" class="hdr-btn" title="Pause all" @click="onPauseAll">⏸ All</button>
         <button v-if="hasPaused" class="hdr-btn" title="Resume all" @click="onResumeAll">▶ All</button>
         <button v-if="hasCancellable" class="hdr-btn danger" title="Cancel all" @click="onCancelAll">✕ All</button>
-        <button class="clear-btn" @click="transferStore.clearCompleted">Clear done</button>
+        <button class="clear-btn" title="Remove completed, cancelled and failed transfers" @click="transferStore.clearCompleted">Clear finished</button>
       </span>
     </div>
     <div class="queue-list">

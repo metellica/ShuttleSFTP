@@ -18,6 +18,12 @@ fn main() {
         .manage(TransferEngine::new(3))
         .manage(PrepareRegistry::default())
         .manage(TerminalManager::default())
+        .setup(|_app| {
+            // Best-effort cleanup of stale eager-download clipboard
+            // temp files from past sessions; never blocks startup.
+            std::thread::spawn(shuttle_sftp::commands::clipboard::prune_stale_temp_dirs);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             shuttle_sftp::commands::connection::connect,
             shuttle_sftp::commands::connection::connect_local,
@@ -45,6 +51,10 @@ fn main() {
             shuttle_sftp::commands::transfer::show_in_folder,
             shuttle_sftp::commands::transfer::list_transfers,
             shuttle_sftp::commands::prepare::cancel_prepare,
+            shuttle_sftp::commands::clipboard::clipboard_supports_files,
+            shuttle_sftp::commands::clipboard::clipboard_seq_num,
+            shuttle_sftp::commands::clipboard::read_system_clipboard_files,
+            shuttle_sftp::commands::clipboard::copy_files_to_system_clipboard,
             shuttle_sftp::commands::terminal::terminal_reserve,
             shuttle_sftp::commands::terminal::terminal_open,
             shuttle_sftp::commands::terminal::terminal_input,
