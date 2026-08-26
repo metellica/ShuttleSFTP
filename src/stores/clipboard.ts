@@ -3,10 +3,8 @@ import { computed, ref } from 'vue'
 import {
   clipboardSeqNum,
   clipboardSupportsFiles,
-  copyFilesToSystemClipboard,
   readSystemClipboardFiles,
 } from '@/composables/useTauri'
-import { usePrepareStore } from '@/stores/prepare'
 
 export type PasteSource =
   | { kind: 'virtual'; sessionId: string; paths: string[]; label: string }
@@ -17,9 +15,13 @@ export type PasteSource =
  *
  * Mixes two clipboards: an in-app "virtual" one (session + remote
  * paths, for efficient remote-to-remote transfers) and, on Windows, the
- * real system clipboard (CF_HDROP) — so files copied here can be
- * pasted into Explorer, and files copied in Explorer can be pasted
- * here (uploading them).
+ * real system clipboard (CF_HDROP) read-only — so files copied in
+ * Explorer can be pasted here (uploading them). Copying files here
+ * only ever populates the virtual clipboard; it is never eagerly
+ * mirrored onto the system clipboard, since that would mean
+ * downloading the whole selection to a temp directory up front (a slow,
+ * user-visible step) just in case the user later pastes into Explorer
+ * instead of another session.
  *
  * `active` holds whichever was touched most recently and is what Paste
  * actually uses — including on a repeat Paste with no new copy in
@@ -39,8 +41,8 @@ export const useClipboardStore = defineStore('clipboard', () => {
     .catch(() => {})
 
   /** System clipboard sequence number as of the last time `active` was
-   *  known to match it (either we just wrote to it, or we just read
-   *  it into `active`); null until the first check. */
+   *  known to match it (i.e. we just read it into `active`); null until
+   *  the first check. */
   const lastSyncedSeq = ref<number | null>(null)
 
   /** Tab the files were copied from ("From <tab>" in the menu); '' for
@@ -50,23 +52,10 @@ export const useClipboardStore = defineStore('clipboard', () => {
   /** Number of files Paste would currently act on. */
   const pasteCount = computed(() => active.value?.paths.length ?? 0)
 
-  /** Mark a selection for Paste: sets the virtual clipboard right away
-   *  (so in-app Paste works instantly even if the step below fails or
-   *  is slow) and, where supported, mirrors the same files onto the
-   *  system clipboard — blocking on a "Preparing files…" spinner since
-   *  it requires eagerly downloading them to a temp directory first. */
-  async function copyFiles(fromSessionId: string, filePaths: string[], label: string) {
+  /** Mark a selection for Paste: sets the virtual clipboard so in-app
+   *  Paste (including remote-to-remote) works instantly. */
+  function copyFiles(fromSessionId: string, filePaths: string[], label: string) {
     active.value = { kind: 'virtual', sessionId: fromSessionId, paths: filePaths, label }
-    if (!supportsFiles.value) return
-    const prepareStore = usePrepareStore()
-    try {
-      const seq = await prepareStore.run('Preparing files for clipboard', (pid) =>
-        copyFilesToSystemClipboard(fromSessionId, filePaths, pid)
-      )
-      if (seq !== undefined) lastSyncedSeq.value = seq
-    } catch (e) {
-      console.error('Copy to system clipboard failed:', e)
-    }
   }
 
   /** Pull in a system-clipboard change since `lastSyncedSeq`, if any,

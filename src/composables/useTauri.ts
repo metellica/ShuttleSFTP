@@ -170,9 +170,10 @@ export const clipboardReadText = async (): Promise<string> => {
 }
 
 // --- System clipboard (real files) -------------------------------------------
-// Windows-only for now: a real file list (CF_HDROP), so remote files
-// copied in the app can be pasted into Explorer, and files copied in
-// Explorer can be pasted into a remote session (uploading them).
+// Windows-only for now: reading a real file list (CF_HDROP) so files
+// copied in Explorer can be pasted into a remote session (uploading
+// them). Files copied in the app are never written back to the system
+// clipboard (see stores/clipboard.ts for why).
 
 /** Whether this platform can carry real files on the system clipboard. */
 export const clipboardSupportsFiles = () => invoke<boolean>('clipboard_supports_files')
@@ -184,20 +185,6 @@ export const clipboardSeqNum = () => invoke<number>('clipboard_seq_num')
 /** Local file paths currently on the system clipboard, or `[]` when
  *  unsupported or it holds something other than files. */
 export const readSystemClipboardFiles = () => invoke<string[]>('read_system_clipboard_files')
-
-/** Download `remotePaths` into a fresh temp dir and place them on the
- *  system clipboard as a real file list. Returns the resulting
- *  clipboard sequence number. */
-export const copyFilesToSystemClipboard = (
-  sessionId: string,
-  remotePaths: string[],
-  prepareId?: string
-) =>
-  invoke<number>('copy_files_to_system_clipboard', {
-    sessionId,
-    remotePaths,
-    prepareId: prepareId ?? null,
-  })
 
 // Config
 export const loadSshConfig = () =>

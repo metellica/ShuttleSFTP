@@ -3,11 +3,18 @@
 //! recently — an in-app Copy or an external file manager copy — wins on
 //! the next Paste. See `stores/clipboard.ts` for the priority logic.
 //!
+//! Only the read direction is supported: files copied in Explorer (or
+//! another app) can be detected and pasted into a remote session to
+//! upload them. Remote files copied in the app are never written back
+//! to the system clipboard — doing so eagerly needed the whole
+//! selection downloaded to a temp dir up front, which was a poor user
+//! experience for large/slow remote-to-remote copies.
+//!
 //! Real file lists (Windows `CF_HDROP`) are Windows-only for now; other
 //! platforms report `supports_files() == false` and the frontend falls
 //! back to the virtual-clipboard-only behaviour it always had.
 
-use crate::error::{AppError, AppResult};
+use crate::error::AppResult;
 
 /// Whether this platform can carry a real file list (not just text) on
 /// the system clipboard.
@@ -29,25 +36,6 @@ pub fn seq_num() -> u64 {
 #[cfg(not(windows))]
 pub fn seq_num() -> u64 {
     0
-}
-
-/// Place `paths` (absolute, local) on the system clipboard as a real
-/// file list, pasteable into Explorer or any other app.
-#[cfg(windows)]
-pub fn write_file_list(paths: &[String]) -> AppResult<()> {
-    use clipboard_win::{formats, Clipboard, Setter};
-    let _clip = Clipboard::new_attempts(10)
-        .map_err(|e| AppError::IoError(format!("Cannot open system clipboard: {}", e)))?;
-    formats::FileList
-        .write_clipboard(paths)
-        .map_err(|e| AppError::IoError(format!("Cannot write file list to clipboard: {}", e)))
-}
-
-#[cfg(not(windows))]
-pub fn write_file_list(_paths: &[String]) -> AppResult<()> {
-    Err(AppError::TransferError(
-        "System clipboard file transfer is not supported on this platform".into(),
-    ))
 }
 
 /// Local file paths currently on the system clipboard, or an empty list

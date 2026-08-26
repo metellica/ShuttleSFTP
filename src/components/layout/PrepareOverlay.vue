@@ -14,8 +14,6 @@ const statusText = computed(() => {
       return `Queueing files… ${n} / ${t}`
     case 'deleting':
       return prepare.total > 0 ? `Deleting files… ${n} / ${t}` : 'Deleting…'
-    case 'downloading':
-      return `Preparing files for clipboard… ${n} / ${t}`
   }
   return ''
 })
