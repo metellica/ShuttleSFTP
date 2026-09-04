@@ -128,9 +128,15 @@ pub async fn list_containers(runner: &dyn CommandRunner) -> AppResult<Vec<Contai
     let mut errors: Vec<String> = Vec::new();
 
     let fmt = "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}";
-    for (rt, bin) in [(RuntimeKind::Docker, "docker"), (RuntimeKind::Nerdctl, "nerdctl")] {
+    for (rt, bin) in [
+        (RuntimeKind::Docker, "docker"),
+        (RuntimeKind::Nerdctl, "nerdctl"),
+    ] {
         match runner
-            .run(&[bin.to_string(), "ps".into(), "--format".into(), fmt.into()], None)
+            .run(
+                &[bin.to_string(), "ps".into(), "--format".into(), fmt.into()],
+                None,
+            )
             .await
         {
             Ok(out) if out.success() => all.extend(parse_ps_lines(&out.stdout_string(), rt)),
@@ -140,7 +146,12 @@ pub async fn list_containers(runner: &dyn CommandRunner) -> AppResult<Vec<Contai
     }
     match runner
         .run(
-            &["crictl".to_string(), "ps".into(), "-o".into(), "json".into()],
+            &[
+                "crictl".to_string(),
+                "ps".into(),
+                "-o".into(),
+                "json".into(),
+            ],
             None,
         )
         .await
@@ -149,7 +160,10 @@ pub async fn list_containers(runner: &dyn CommandRunner) -> AppResult<Vec<Contai
             let found = parse_crictl_json(&out.stdout_string());
             // Skip containers already reported by docker/nerdctl (id prefix match)
             for c in found {
-                if !all.iter().any(|e| c.id.starts_with(&e.id) || e.id.starts_with(&c.id)) {
+                if !all
+                    .iter()
+                    .any(|e| c.id.starts_with(&e.id) || e.id.starts_with(&c.id))
+                {
                     all.push(c);
                 }
             }
@@ -220,7 +234,9 @@ pub async fn kube_pods(
     namespace: &str,
 ) -> AppResult<Vec<PodInfo>> {
     let mut argv = kubectl_base(context);
-    argv.extend(crate::exec::argv(&["get", "pods", "-n", namespace, "-o", "json"]));
+    argv.extend(crate::exec::argv(&[
+        "get", "pods", "-n", namespace, "-o", "json",
+    ]));
     let out = runner.run(&argv, None).await?.check("kubectl get pods")?;
     let v: serde_json::Value = serde_json::from_str(&out.stdout_string())
         .map_err(|e| AppError::IoError(format!("Cannot parse kubectl output: {}", e)))?;
@@ -454,30 +470,34 @@ impl AsyncWrite for ExecWriter {
 #[async_trait]
 impl FsWriter for ExecWriter {
     async fn finish(mut self: Box<Self>) -> AppResult<()> {
-        let ExecStream {
-            mut stdin, done, ..
-        } = self.stream;
-        stdin
+        self.stream
+            .stdin
             .shutdown()
             .await
             .map_err(|e| AppError::IoError(format!("Container write close error: {}", e)))?;
         // Dropping stdin closes the pipe: that's what actually delivers EOF
         // to the child (shutdown alone doesn't on all platforms).
-        drop(stdin);
+        let closed: Box<dyn AsyncWrite + Send + Unpin> = Box::new(tokio::io::sink());
+        drop(std::mem::replace(&mut self.stream.stdin, closed));
         // Wait for the exec command to exit and verify success.
-        match done.await {
+        match (&mut self.stream.done).await {
             Ok(done) => {
-                if done.exit.unwrap_or(0) != 0 {
+                if done.exit != Some(0) {
                     return Err(AppError::TransferError(format!(
                         "{} failed (exit {}): {}",
                         self.what,
-                        done.exit.unwrap_or(0),
+                        done.exit
+                            .map(|exit| exit.to_string())
+                            .unwrap_or_else(|| "unknown".into()),
                         done.stderr.trim()
                     )));
                 }
                 Ok(())
             }
-            Err(_) => Ok(()), // status channel dropped: treat as done
+            Err(_) => Err(AppError::TransferError(format!(
+                "{} completion status was lost",
+                self.what
+            ))),
         }
     }
 }
@@ -741,8 +761,17 @@ mod tests {
         assert_eq!(
             t.exec_prefix(),
             vec![
-                "kubectl", "--context", "prod", "exec", "-i", "-n", "ns1", "web-1", "-c",
-                "app", "--"
+                "kubectl",
+                "--context",
+                "prod",
+                "exec",
+                "-i",
+                "-n",
+                "ns1",
+                "web-1",
+                "-c",
+                "app",
+                "--"
             ]
         );
     }
@@ -750,7 +779,8 @@ mod tests {
     #[test]
     fn parses_stat_line() {
         // 0x81a4 = regular file 0644
-        let (mode, size, mtime, name) = ExecFs::parse_stat_line("81a4|1234|1700000000|hello world.txt").unwrap();
+        let (mode, size, mtime, name) =
+            ExecFs::parse_stat_line("81a4|1234|1700000000|hello world.txt").unwrap();
         assert_eq!(mode & S_IFMT, 0x8000);
         assert_eq!(size, 1234);
         assert_eq!(mtime, 1700000000);

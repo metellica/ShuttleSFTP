@@ -89,7 +89,13 @@ async function buildParams(bm: Bookmark): Promise<ConnectParams | null> {
     }
     auth = { type: 'password', password }
   }
-  return { host: bm.host, port: bm.port, username: bm.username, auth }
+  return {
+    host: bm.host,
+    port: bm.port,
+    username: bm.username,
+    auth,
+    jumpHosts: bm.jumpHosts?.map((jump) => ({ ...jump })),
+  }
 }
 
 async function connect(bm: Bookmark) {

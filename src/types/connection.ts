@@ -11,6 +11,17 @@ export interface ConnectionProfile {
   password?: string
   /** Present only when the user opted in (key passphrase). */
   passphrase?: string
+  jumpHosts?: JumpHost[]
+}
+
+export interface JumpHost {
+  alias?: string
+  host: string
+  port: number
+  username?: string
+  identityFile?: string
+  password?: string
+  passphrase?: string
 }
 
 export interface ConnectParams {
@@ -18,6 +29,7 @@ export interface ConnectParams {
   port: number
   username: string
   auth: PasswordAuth | KeyAuth | AgentAuth
+  jumpHosts?: JumpHost[]
 }
 
 export interface PasswordAuth {
@@ -41,6 +53,7 @@ export interface SshHostEntry {
   port: number | null
   user: string | null
   identityFile: string | null
+  jumpHosts: JumpHost[]
 }
 
 export type SessionKind = 'ssh' | 'local'
@@ -73,6 +86,7 @@ export interface Bookmark {
   password?: string
   /** Present only when captured from a key connection with passphrase. */
   passphrase?: string
+  jumpHosts?: JumpHost[]
   /** Remote directory this bookmark opens (may point into /@containers or /@pods). */
   path: string
   /** Endpoint type; missing means classic SSH bookmark. */

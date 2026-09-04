@@ -1,6 +1,6 @@
 import { sshConnect, connectLocal, listProfiles, listBookmarks } from '@/composables/useTauri'
 import { useTabsStore } from '@/stores/tabs'
-import type { ConnectParams } from '@/types/connection'
+import type { ConnectParams, JumpHost } from '@/types/connection'
 import { LOCAL_TAB_LABEL } from '@/types/connection'
 import type { TransferTask } from '@/types/transfer'
 
@@ -12,6 +12,7 @@ interface SavedCredentials {
   privateKeyPath?: string
   password?: string
   passphrase?: string
+  jumpHosts?: JumpHost[]
 }
 
 function paramsFrom(src: SavedCredentials): ConnectParams | null {
@@ -22,6 +23,7 @@ function paramsFrom(src: SavedCredentials): ConnectParams | null {
       port: src.port,
       username: src.username,
       auth: { type: 'password', password: src.password },
+      jumpHosts: src.jumpHosts?.map((jump) => ({ ...jump })),
     }
   }
   if (src.authMethod === 'key') {
@@ -31,6 +33,7 @@ function paramsFrom(src: SavedCredentials): ConnectParams | null {
       port: src.port,
       username: src.username,
       auth: { type: 'key', key_path: src.privateKeyPath, passphrase: src.passphrase ?? null },
+      jumpHosts: src.jumpHosts?.map((jump) => ({ ...jump })),
     }
   }
   return null // agent auth is not implemented in the backend

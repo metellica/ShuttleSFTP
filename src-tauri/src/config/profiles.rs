@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::error::{AppError, AppResult};
+use crate::ssh::session::JumpHost;
 
 /// A saved connection profile.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,6 +22,8 @@ pub struct ConnectionProfile {
     /// Stored only when the user opts in (key passphrase).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub passphrase: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub jump_hosts: Vec<JumpHost>,
 }
 
 /// Get the app config directory for storing profiles.

@@ -16,9 +16,10 @@ use crate::transfer::progress::{
     TaskGroup, TransferDirection, TransferProgress, TransferStatus, TransferTask,
 };
 
-const CHUNK_SIZE: usize = 64 * 1024;
+const CHUNK_SIZE: usize = 256 * 1024;
 const PROGRESS_EMIT_THRESHOLD: u64 = 256 * 1024;
 const SPEED_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
+const CONTROL_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
 
 /// Sliding-window transfer rate estimator: reports the rate over the
 /// last few seconds instead of a whole-transfer average, so the shown
@@ -101,6 +102,21 @@ enum Outcome {
     Completed,
     Paused,
     Cancelled,
+}
+
+enum StreamingDownloadResult {
+    Completed,
+    Controlled(Outcome),
+    Unavailable(String),
+}
+
+struct StreamingDownloadContext<'a> {
+    tasks: &'a TaskMap,
+    app: &'a tauri::AppHandle,
+    task_id: &'a str,
+    dst_fs: &'a Arc<dyn RemoteFs>,
+    dst_path: &'a str,
+    total: u64,
 }
 
 /// Status change event emitted to the frontend.
@@ -254,7 +270,10 @@ impl TransferEngine {
             transferred_bytes: 0,
             status: TransferStatus::Queued,
         };
-        self.tasks.lock().await.insert(task_id.clone(), task.clone());
+        self.tasks
+            .lock()
+            .await
+            .insert(task_id.clone(), task.clone());
         schedule_persist(&self.tasks);
         // Tell the frontend right away so the queue UI shows the task even
         // while a long multi-file queueing call is still in progress.
@@ -609,10 +628,11 @@ impl TransferEngine {
         let (changed, was_active) = {
             let mut tasks = self.tasks.lock().await;
             match tasks.get_mut(task_id) {
-                Some(t) if matches!(
-                    t.status,
-                    TransferStatus::Queued | TransferStatus::Active | TransferStatus::Paused
-                ) =>
+                Some(t)
+                    if matches!(
+                        t.status,
+                        TransferStatus::Queued | TransferStatus::Active | TransferStatus::Paused
+                    ) =>
                 {
                     let was_active = t.status == TransferStatus::Active;
                     t.status = TransferStatus::Cancelled;
@@ -734,7 +754,10 @@ impl TransferEngine {
                 .filter(|t| t.group_id.as_deref() == Some(group_id))
             {
                 if matches!(t.direction, TransferDirection::Download) && root.is_none() {
-                    root = Some(group_root(&t.dest_path, t.rel_path.as_deref().unwrap_or("")));
+                    root = Some(group_root(
+                        &t.dest_path,
+                        t.rel_path.as_deref().unwrap_or(""),
+                    ));
                 }
                 if matches!(
                     t.status,
@@ -988,6 +1011,298 @@ async fn server_side_copy_script(
     Some((runner, format!("{} | {}", read_cmd, write_cmd)))
 }
 
+/// An SSH command that streams a remote file to stdout. This avoids the
+/// request/response latency of serial SFTP reads, especially through jumps.
+async fn ssh_streaming_download_source(
+    src: &Endpoint,
+    src_path: &str,
+    dst: &Endpoint,
+) -> Option<(Arc<dyn crate::exec::CommandRunner>, String)> {
+    let (Endpoint::Session { session, .. }, Endpoint::Local) = (src, dst) else {
+        return None;
+    };
+    let session = session.lock().await;
+    session.ssh.as_ref()?;
+    Some((
+        session.runner.clone(),
+        session.fs.server_read_cmd(src_path)?,
+    ))
+}
+
+async fn relay_stream(
+    tasks: &TaskMap,
+    app: &tauri::AppHandle,
+    task_id: &str,
+    reader: &mut (dyn tokio::io::AsyncRead + Send + Unpin),
+    writer: &mut dyn crate::fs::FsWriter,
+    offset: u64,
+    total: u64,
+) -> AppResult<(Outcome, u64, SpeedMeter)> {
+    let mut meter = SpeedMeter::new(offset);
+    let mut buf = vec![0u8; CHUNK_SIZE];
+    let mut transferred = offset;
+    let mut last_emit = offset;
+
+    record_progress(tasks, app, task_id, transferred, total, &mut meter).await;
+
+    loop {
+        if let Some(outcome) = check_control(tasks, task_id).await {
+            let _ = writer.flush().await;
+            record_progress(tasks, app, task_id, transferred, total, &mut meter).await;
+            return Ok((outcome, transferred, meter));
+        }
+        let n = loop {
+            tokio::select! {
+                result = reader.read(&mut buf) => {
+                    break result.map_err(|e| {
+                        AppError::TransferError(format!("Read error: {}", e))
+                    })?;
+                }
+                _ = tokio::time::sleep(CONTROL_POLL_INTERVAL) => {
+                    if let Some(outcome) = check_control(tasks, task_id).await {
+                        let _ = writer.flush().await;
+                        record_progress(
+                            tasks,
+                            app,
+                            task_id,
+                            transferred,
+                            total,
+                            &mut meter,
+                        )
+                        .await;
+                        return Ok((outcome, transferred, meter));
+                    }
+                }
+            }
+        };
+        if n == 0 {
+            break;
+        }
+        writer
+            .write_all(&buf[..n])
+            .await
+            .map_err(|e| AppError::TransferError(format!("Write error: {}", e)))?;
+        transferred += n as u64;
+        if transferred - last_emit >= PROGRESS_EMIT_THRESHOLD {
+            last_emit = transferred;
+            record_progress(tasks, app, task_id, transferred, total, &mut meter).await;
+        }
+    }
+
+    Ok((Outcome::Completed, transferred, meter))
+}
+
+async fn try_ssh_streaming_download(
+    context: StreamingDownloadContext<'_>,
+    runner: Arc<dyn crate::exec::CommandRunner>,
+    read_cmd: String,
+) -> AppResult<StreamingDownloadResult> {
+    let argv = vec!["sh".to_string(), "-c".into(), read_cmd.clone()];
+    let mut stream = match runner.spawn(&argv).await {
+        Ok(stream) => stream,
+        Err(error) => {
+            return Ok(StreamingDownloadResult::Unavailable(error.to_string()));
+        }
+    };
+    if let Err(error) = stream.stdin.shutdown().await {
+        stream.abort().await;
+        return Ok(StreamingDownloadResult::Unavailable(format!(
+            "cannot close SSH command input: {}",
+            error
+        )));
+    }
+
+    // Prove that the remote command can produce data before truncating an
+    // existing destination. A zero-byte failure can then safely use SFTP.
+    let mut first_chunk = vec![0u8; CHUNK_SIZE];
+    let first_len = loop {
+        tokio::select! {
+            result = stream.stdout.read(&mut first_chunk) => {
+                break result.map_err(|error| {
+                    AppError::TransferError(format!("SSH streaming read error: {}", error))
+                })?;
+            }
+            _ = tokio::time::sleep(CONTROL_POLL_INTERVAL) => {
+                if let Some(outcome) = check_control(context.tasks, context.task_id).await {
+                    stream.abort().await;
+                    return Ok(StreamingDownloadResult::Controlled(outcome));
+                }
+            }
+        }
+    };
+
+    if first_len == 0 {
+        let done_result = loop {
+            tokio::select! {
+                done = &mut stream.done => break done,
+                _ = tokio::time::sleep(CONTROL_POLL_INTERVAL) => {
+                    if let Some(outcome) =
+                        check_control(context.tasks, context.task_id).await
+                    {
+                        stream.abort().await;
+                        return Ok(StreamingDownloadResult::Controlled(outcome));
+                    }
+                }
+            }
+        };
+        let done = match done_result {
+            Ok(done) => done,
+            Err(error) => {
+                stream.abort().await;
+                return Ok(StreamingDownloadResult::Unavailable(format!(
+                    "SSH command completion was lost: {}",
+                    error
+                )));
+            }
+        };
+        if done.exit != Some(0) {
+            stream.abort().await;
+            return Ok(StreamingDownloadResult::Unavailable(format!(
+                "remote read command failed (exit {}): {}",
+                done.exit
+                    .map(|exit| exit.to_string())
+                    .unwrap_or_else(|| "unknown".into()),
+                done.stderr.trim()
+            )));
+        }
+        if context.total != 0 {
+            return Err(AppError::TransferError(format!(
+                "SSH streaming download size mismatch: 0 of {} bytes",
+                context.total
+            )));
+        }
+        let writer = context.dst_fs.open_write(context.dst_path, 0).await?;
+        writer.finish().await?;
+        let mut meter = SpeedMeter::new(0);
+        record_progress(
+            context.tasks,
+            context.app,
+            context.task_id,
+            0,
+            0,
+            &mut meter,
+        )
+        .await;
+        return Ok(StreamingDownloadResult::Completed);
+    }
+
+    let mut writer = match context.dst_fs.open_write(context.dst_path, 0).await {
+        Ok(writer) => writer,
+        Err(error) => {
+            stream.abort().await;
+            return Err(error);
+        }
+    };
+    if let Err(error) = writer.write_all(&first_chunk[..first_len]).await {
+        stream.abort().await;
+        return Err(AppError::TransferError(format!("Write error: {}", error)));
+    }
+    log::info!(
+        "Transfer {} using SSH streaming download: {}",
+        context.task_id,
+        read_cmd
+    );
+    let relay_result = relay_stream(
+        context.tasks,
+        context.app,
+        context.task_id,
+        stream.stdout.as_mut(),
+        writer.as_mut(),
+        first_len as u64,
+        context.total,
+    )
+    .await;
+    let (outcome, transferred, mut meter) = match relay_result {
+        Ok(result) => result,
+        Err(error) => {
+            stream.abort().await;
+            return Err(error);
+        }
+    };
+    if !matches!(outcome, Outcome::Completed) {
+        stream.abort().await;
+        return Ok(StreamingDownloadResult::Controlled(outcome));
+    }
+
+    let done_result = loop {
+        tokio::select! {
+            done = &mut stream.done => break done,
+            _ = tokio::time::sleep(CONTROL_POLL_INTERVAL) => {
+                if let Some(outcome) = check_control(context.tasks, context.task_id).await {
+                    let _ = writer.flush().await;
+                    record_progress(
+                        context.tasks,
+                        context.app,
+                        context.task_id,
+                        transferred,
+                        context.total,
+                        &mut meter,
+                    )
+                    .await;
+                    stream.abort().await;
+                    return Ok(StreamingDownloadResult::Controlled(outcome));
+                }
+            }
+        }
+    };
+    let done = match done_result {
+        Ok(done) => done,
+        Err(error) if transferred == 0 => {
+            stream.abort().await;
+            return Ok(StreamingDownloadResult::Unavailable(format!(
+                "SSH command completion was lost: {}",
+                error
+            )));
+        }
+        Err(error) => {
+            stream.abort().await;
+            return Err(AppError::TransferError(format!(
+                "SSH streaming download aborted after {} bytes: {}",
+                transferred, error
+            )));
+        }
+    };
+    if done.exit != Some(0) {
+        if transferred == 0 {
+            stream.abort().await;
+            return Ok(StreamingDownloadResult::Unavailable(format!(
+                "remote read command failed (exit {}): {}",
+                done.exit
+                    .map(|exit| exit.to_string())
+                    .unwrap_or_else(|| "unknown".into()),
+                done.stderr.trim()
+            )));
+        }
+        stream.abort().await;
+        return Err(AppError::TransferError(format!(
+            "SSH streaming download failed after {} bytes (exit {}): {}",
+            transferred,
+            done.exit
+                .map(|exit| exit.to_string())
+                .unwrap_or_else(|| "unknown".into()),
+            done.stderr.trim()
+        )));
+    }
+
+    writer.finish().await?;
+    if transferred != context.total {
+        return Err(AppError::TransferError(format!(
+            "SSH streaming download size mismatch: {} of {} bytes",
+            transferred, context.total
+        )));
+    }
+    record_progress(
+        context.tasks,
+        context.app,
+        context.task_id,
+        transferred,
+        context.total,
+        &mut meter,
+    )
+    .await;
+    Ok(StreamingDownloadResult::Completed)
+}
+
 /// Generic streaming copy between two endpoints, with an opportunistic
 /// same-host server-side fast path.
 async fn run_copy(
@@ -1010,9 +1325,7 @@ async fn run_copy(
         map.get(task_id).map(|t| t.transferred_bytes).unwrap_or(0)
     };
     let mut offset = 0u64;
-    if resume_hint > 0
-        && src_fs.supports_resume_at(src_path)
-        && dst_fs.supports_resume_at(dst_path)
+    if resume_hint > 0 && src_fs.supports_resume_at(src_path) && dst_fs.supports_resume_at(dst_path)
     {
         if let Ok(meta) = dst_fs.stat(dst_path).await {
             offset = meta.size.min(total);
@@ -1046,7 +1359,7 @@ async fn run_copy(
                     }
                     _ = tokio::time::sleep(std::time::Duration::from_millis(300)) => {
                         if let Some(outcome) = check_control(tasks, task_id).await {
-                            drop(stream);
+                            stream.abort().await;
                             return Ok(outcome);
                         }
                         // Poll the destination size (every other tick) so
@@ -1082,39 +1395,53 @@ async fn run_copy(
         }
     }
 
+    if offset == 0 {
+        if let Some((runner, read_cmd)) = ssh_streaming_download_source(src, src_path, dst).await {
+            if let Some(outcome) = check_control(tasks, task_id).await {
+                return Ok(outcome);
+            }
+            match try_ssh_streaming_download(
+                StreamingDownloadContext {
+                    tasks,
+                    app,
+                    task_id,
+                    dst_fs: &dst_fs,
+                    dst_path,
+                    total,
+                },
+                runner,
+                read_cmd,
+            )
+            .await?
+            {
+                StreamingDownloadResult::Completed => return Ok(Outcome::Completed),
+                StreamingDownloadResult::Controlled(outcome) => return Ok(outcome),
+                StreamingDownloadResult::Unavailable(reason) => {
+                    log::warn!(
+                        "Transfer {} cannot use SSH streaming download, falling back to SFTP: {}",
+                        task_id,
+                        reason
+                    );
+                }
+            }
+        }
+    }
+
     let reader = src_fs.open_read(src_path, offset).await?;
     let mut remote_reader = reader.reader;
     let mut writer = dst_fs.open_write(dst_path, offset).await?;
-
-    let mut meter = SpeedMeter::new(offset);
-    let mut buf = vec![0u8; CHUNK_SIZE];
-    let mut transferred: u64 = offset;
-    let mut last_emit: u64 = offset;
-
-    record_progress(tasks, app, task_id, transferred, total, &mut meter).await;
-
-    loop {
-        if let Some(outcome) = check_control(tasks, task_id).await {
-            let _ = writer.flush().await;
-            record_progress(tasks, app, task_id, transferred, total, &mut meter).await;
-            return Ok(outcome);
-        }
-        let n = remote_reader
-            .read(&mut buf)
-            .await
-            .map_err(|e| AppError::TransferError(format!("Read error: {}", e)))?;
-        if n == 0 {
-            break;
-        }
-        writer
-            .write_all(&buf[..n])
-            .await
-            .map_err(|e| AppError::TransferError(format!("Write error: {}", e)))?;
-        transferred += n as u64;
-        if transferred - last_emit >= PROGRESS_EMIT_THRESHOLD {
-            last_emit = transferred;
-            record_progress(tasks, app, task_id, transferred, total, &mut meter).await;
-        }
+    let (outcome, transferred, mut meter) = relay_stream(
+        tasks,
+        app,
+        task_id,
+        remote_reader.as_mut(),
+        writer.as_mut(),
+        offset,
+        total,
+    )
+    .await?;
+    if !matches!(outcome, Outcome::Completed) {
+        return Ok(outcome);
     }
 
     writer.finish().await?;

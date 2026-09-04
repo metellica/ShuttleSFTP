@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 
 use crate::error::{AppError, AppResult};
 use crate::ssh::client::ClientHandler;
@@ -57,6 +57,45 @@ pub struct ExecStream {
     pub stdout: Box<dyn AsyncRead + Send + Unpin>,
     /// Resolves when the command finishes.
     pub done: oneshot::Receiver<ExecDone>,
+    ssh_abort: Option<SshExecAbort>,
+}
+
+struct SshExecAbort {
+    channel: Option<russh::ChannelWriteHalf<russh::client::Msg>>,
+    signal: watch::Sender<bool>,
+}
+
+impl SshExecAbort {
+    async fn abort(&mut self) {
+        let _ = self.signal.send(true);
+        if let Some(channel) = &self.channel {
+            let _ = channel.close().await;
+        }
+    }
+}
+
+impl Drop for SshExecAbort {
+    fn drop(&mut self) {
+        let _ = self.signal.send(true);
+        let Some(channel) = self.channel.take() else {
+            return;
+        };
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                let _ = channel.close().await;
+            });
+        }
+    }
+}
+
+impl ExecStream {
+    /// Explicitly close a remote SSH command channel. This is a no-op for
+    /// commands running on the local machine.
+    pub async fn abort(&mut self) {
+        if let Some(abort) = &mut self.ssh_abort {
+            abort.abort().await;
+        }
+    }
 }
 
 /// Runs argv-style commands on a target machine: the local machine or a
@@ -186,6 +225,7 @@ impl CommandRunner for LocalRunner {
             stdin: Box::new(stdin),
             stdout: Box::new(stdout),
             done: rx,
+            ssh_abort: None,
         })
     }
 
@@ -204,7 +244,10 @@ pub struct SshRunner {
 }
 
 impl SshRunner {
-    pub fn new(handle: Arc<russh::client::Handle<ClientHandler>>, label: impl Into<String>) -> Self {
+    pub fn new(
+        handle: Arc<russh::client::Handle<ClientHandler>>,
+        label: impl Into<String>,
+    ) -> Self {
         Self {
             handle,
             label: label.into(),
@@ -243,9 +286,7 @@ impl CommandRunner for SshRunner {
         while let Some(msg) = channel.wait().await {
             match msg {
                 russh::ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
-                russh::ChannelMsg::ExtendedData { data, ext: 1 } => {
-                    stderr.extend_from_slice(&data)
-                }
+                russh::ChannelMsg::ExtendedData { data, ext: 1 } => stderr.extend_from_slice(&data),
                 russh::ChannelMsg::ExitStatus { exit_status } => exit = Some(exit_status),
                 russh::ChannelMsg::Failure => {
                     return Err(AppError::IoError("SSH exec request rejected".into()))
@@ -278,11 +319,22 @@ impl CommandRunner for SshRunner {
         // AsyncRead, while stderr and the exit status are collected aside.
         let (pipe_writer, pipe_reader) = tokio::io::duplex(256 * 1024);
         let (tx, rx) = oneshot::channel();
+        let (abort_tx, mut abort_rx) = watch::channel(false);
         tokio::spawn(async move {
             let mut pipe_writer = pipe_writer;
             let mut stderr = Vec::new();
             let mut exit = None;
-            while let Some(msg) = read_half.wait().await {
+            loop {
+                let msg = tokio::select! {
+                    msg = read_half.wait() => msg,
+                    changed = abort_rx.changed() => {
+                        let _ = changed;
+                        break;
+                    }
+                };
+                let Some(msg) = msg else {
+                    break;
+                };
                 match msg {
                     russh::ChannelMsg::Data { data } => {
                         if pipe_writer.write_all(&data).await.is_err() {
@@ -302,40 +354,14 @@ impl CommandRunner for SshRunner {
                 stderr: String::from_utf8_lossy(&stderr).to_string(),
             });
         });
-        // Keep the write half alive inside the stdin box: dropping it closes
-        // the channel. Bundle both via a wrapper.
-        struct SshStdin<W: AsyncWrite + Unpin + Send> {
-            writer: W,
-            _half: russh::ChannelWriteHalf<russh::client::Msg>,
-        }
-        impl<W: AsyncWrite + Unpin + Send> AsyncWrite for SshStdin<W> {
-            fn poll_write(
-                mut self: std::pin::Pin<&mut Self>,
-                cx: &mut std::task::Context<'_>,
-                buf: &[u8],
-            ) -> std::task::Poll<Result<usize, std::io::Error>> {
-                std::pin::Pin::new(&mut self.writer).poll_write(cx, buf)
-            }
-            fn poll_flush(
-                mut self: std::pin::Pin<&mut Self>,
-                cx: &mut std::task::Context<'_>,
-            ) -> std::task::Poll<Result<(), std::io::Error>> {
-                std::pin::Pin::new(&mut self.writer).poll_flush(cx)
-            }
-            fn poll_shutdown(
-                mut self: std::pin::Pin<&mut Self>,
-                cx: &mut std::task::Context<'_>,
-            ) -> std::task::Poll<Result<(), std::io::Error>> {
-                std::pin::Pin::new(&mut self.writer).poll_shutdown(cx)
-            }
-        }
         Ok(ExecStream {
-            stdin: Box::new(SshStdin {
-                writer: stdin,
-                _half: write_half,
-            }),
+            stdin: Box::new(stdin),
             stdout: Box::new(pipe_reader),
             done: rx,
+            ssh_abort: Some(SshExecAbort {
+                channel: Some(write_half),
+                signal: abort_tx,
+            }),
         })
     }
 
@@ -389,8 +415,7 @@ mod tests {
         stream.stdin.write_all(b"hello\r\n").await.unwrap();
         stream.stdin.shutdown().await.unwrap();
         // Dropping stdin is what delivers EOF to the child on Windows
-        let closed: Box<dyn tokio::io::AsyncWrite + Send + Unpin> =
-            Box::new(tokio::io::sink());
+        let closed: Box<dyn tokio::io::AsyncWrite + Send + Unpin> = Box::new(tokio::io::sink());
         drop(std::mem::replace(&mut stream.stdin, closed));
         let mut buf = String::new();
         stream.stdout.read_to_string(&mut buf).await.unwrap();

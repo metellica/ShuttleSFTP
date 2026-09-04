@@ -31,7 +31,8 @@ A fast, lightweight, cross-platform SFTP/SCP GUI built with **Tauri 2 + Vue 3 + 
 - ⭐ **Bookmarks** — Right-click any remote folder to bookmark it (with custom alias); the bookmarks window groups paths per server (collapsible tree), and connecting opens a tab labeled `user@alias`
 - 🖥️ **Integrated Terminal** — Toolbar button opens a shell in the current directory (local PTY or SSH); browsing inside a container or pod auto-attaches via `docker`/`nerdctl`/`crictl`/`kubectl exec`. Multiple terminals per tab (each tab keeps its own set), resizable drawer height
 - 🔑 **Flexible Auth** — Password, private key (with passphrase), SSH agent
-- 📋 **SSH Config Import** — Pick which `~/.ssh/config` hosts to import (checkbox picker with filter); only imported hosts appear in the fuzzy-search dropdown
+- 📋 **SSH Config Import** — Pick which `~/.ssh/config` hosts to import (checkbox picker with filter), including single-hop and multi-hop `ProxyJump` routes; only imported hosts appear in the fuzzy-search dropdown
+- ⚡ **Streaming SSH Downloads** — Fresh SSH-to-local downloads use a continuous exec-channel stream to avoid serial SFTP round trips; paused/resumed or unsupported transfers fall back to SFTP
 - 💾 **Saved Profiles** — Save connections (optionally with credentials) for quick reuse, with or without connecting; aliases are globally unique across profiles and SSH config hosts
 - ⧉ **Clone Connections** — One-click ⧉ in the host dropdown duplicates any saved profile or SSH config host as a new editable connection ("name copy")
 - 🗂️ **Multi-Tab** — Multiple concurrent SFTP sessions in tabs (labeled by SSH alias)
@@ -133,6 +134,37 @@ ShuttleSFTP/
 14. **Terminal**: Click **🖥 Terminal** to open a shell in the current directory — a local PTY for "This Machine" sessions, an SSH shell for remote hosts, and an automatic `exec` attach when you're inside `/@containers/...` or `/@pods/...`. Each browser tab keeps its own terminals: use **+** in the drawer to open more, click a chip to switch, ✕ to close, and drag the drawer's top edge to resize
 15. **Row size**: Ctrl+wheel over the file listing (or `Ctrl+=` / `Ctrl+-`, `Ctrl+0` to reset) zooms rows between 75 % and 250 %. The **Aa** button at the right of the path bar offers Small / Medium / Large presets and a stepless slider; the setting is remembered
 
+### ProxyJump
+
+Imported SSH config hosts support direct jump destinations, aliases and comma-separated multi-hop routes:
+
+```sshconfig
+Host bastion
+  HostName gateway.example.com
+  User jump-user
+  IdentityFile ~/.ssh/bastion_ed25519
+
+Host production
+  HostName 10.0.0.20
+  User deploy
+  IdentityFile ~/.ssh/production_ed25519
+  ProxyJump bastion
+```
+
+`ProxyJump user@host:port`, bracketed IPv6 addresses, `Host *` defaults, wildcard rules, multi-name `Host` blocks and `Keyword=value` syntax are supported. The connection dialog shows the resolved jump route and lets each hop use its configured key plus an optional passphrase, or a separate password. When hop credentials are left blank, the target credentials are reused.
+
+The app stores only the selected SSH config host names, then rereads `~/.ssh/config` when it starts. Existing imported entries therefore pick up ProxyJump changes without being re-imported; already-open sessions must reconnect. Profiles cloned from SSH config and existing bookmarks are independent copies of their routes.
+
+### SSH download transport
+
+Fresh SSH-to-local downloads use the existing authenticated SSH session to run the endpoint's read command and continuously stream stdout to the local file. This avoids the per-request round trips of serial SFTP reads and is particularly useful on high-latency ProxyJump routes.
+
+- The destination is not truncated until the remote command produces data or successfully confirms an empty file
+- Remote exit status and the exact downloaded byte count are verified
+- Pause and cancel explicitly close the SSH command channel
+- Resumed downloads use SFTP offset reads
+- SFTP remains the fallback when SSH exec or the required remote shell command is unavailable
+
 ### Container & pod access notes
 
 - **SSH hosts**: containers are accessed through their rootfs on the host when possible (docker `MergedDir`, containerd runtime v2 task dirs — requires read permission, typically root). This works even for distroless/scratch images. Otherwise access falls back to `docker/nerdctl/crictl exec` + shell tools inside the container
@@ -166,6 +198,8 @@ GitHub Actions builds installers for all platforms and publishes them to a GitHu
 - [x] Multi-tab SFTP sessions
 - [x] Password + private key auth
 - [x] SSH config host import (user-selected hosts, fuzzy search)
+- [x] SSH config ProxyJump (single-hop and multi-hop)
+- [x] Streaming SSH download fast path with SFTP fallback
 - [x] Drag & drop upload
 - [x] Download / Save As via context menu
 - [x] Finder-style column view with breadcrumb navigation

@@ -14,6 +14,7 @@ import type {
   ConnectParams,
   ConnectionProfile,
   ConnectedMeta,
+  JumpHost,
   SessionKind,
 } from '@/types/connection'
 import { LOCAL_TAB_LABEL } from '@/types/connection'
@@ -56,6 +57,7 @@ const savePassword = ref(false)
 const selectedProfileId = ref('')
 const fromSshConfig = ref(false)
 const saveMsg = ref('')
+const jumpHosts = ref<JumpHost[]>([])
 
 onMounted(async () => {
   try {
@@ -182,6 +184,7 @@ function onHostInput() {
   selectedAlias.value = ''
   selectedProfileId.value = ''
   fromSshConfig.value = false
+  jumpHosts.value = []
   saveMsg.value = ''
   openDropdown()
 }
@@ -210,6 +213,7 @@ function selectOption(opt: HostOption) {
     aliasName.value = p.name
     selectedProfileId.value = p.id
     fromSshConfig.value = false
+    jumpHosts.value = p.jumpHosts?.map((jump) => ({ ...jump })) ?? []
     saveNode.value = true
     if (p.authMethod === 'key') {
       authType.value = 'key'
@@ -219,7 +223,11 @@ function selectOption(opt: HostOption) {
       authType.value = 'password'
       password.value = p.password || ''
     }
-    savePassword.value = !!(p.password || p.passphrase)
+    savePassword.value = !!(
+      p.password ||
+      p.passphrase ||
+      p.jumpHosts?.some((jump) => jump.password || jump.passphrase)
+    )
   } else if (opt.sshEntry) {
     const entry = opt.sshEntry
     host.value = entry.hostname || entry.name
@@ -228,13 +236,19 @@ function selectOption(opt: HostOption) {
     selectedProfileId.value = ''
     // SSH config hosts are managed in ~/.ssh/config — don't re-save them
     fromSshConfig.value = true
+    jumpHosts.value = entry.jumpHosts.map((jump) => ({ ...jump }))
     saveNode.value = false
     savePassword.value = false
-    if (entry.port) port.value = entry.port
-    if (entry.user) username.value = entry.user
+    port.value = entry.port ?? 22
+    username.value = entry.user ?? ''
+    password.value = ''
+    passphrase.value = ''
     if (entry.identityFile) {
       authType.value = 'key'
       keyPath.value = entry.identityFile
+    } else {
+      authType.value = 'password'
+      keyPath.value = ''
     }
   }
   showDropdown.value = false
@@ -291,6 +305,16 @@ async function persistProfile() {
     port: port.value,
     username: username.value,
     authMethod: authType.value,
+  }
+  if (jumpHosts.value.length) {
+    profile.jumpHosts = jumpHosts.value.map((jump) => {
+      const saved = { ...jump }
+      if (!savePassword.value) {
+        delete saved.password
+        delete saved.passphrase
+      }
+      return saved
+    })
   }
   if (authType.value === 'key') {
     profile.privateKeyPath = keyPath.value
@@ -356,6 +380,7 @@ async function doConnect() {
         authType.value === 'password'
           ? { type: 'password', password: password.value }
           : { type: 'key', key_path: keyPath.value, passphrase: passphrase.value || null },
+      jumpHosts: jumpHosts.value.map((jump) => ({ ...jump })),
     }
     const sessionId = await sshConnect(params)
     if (saveNode.value) {
@@ -479,6 +504,45 @@ async function doConnect() {
           </div>
         </div>
 
+        <div v-if="jumpHosts.length" class="jump-list">
+          <div class="jump-heading">
+            ProxyJump:
+            <code>{{ jumpHosts.map((jump) => jump.alias || jump.host).join(' → ') }}</code>
+          </div>
+          <div v-for="(jump, index) in jumpHosts" :key="index" class="jump-hop">
+            <div class="jump-title">
+              {{ index + 1 }}. {{ jump.username || username }}@{{ jump.alias || jump.host }}:{{
+                jump.port
+              }}
+            </div>
+            <div class="row">
+              <div class="field">
+                <label>Jump Key Path (optional)</label>
+                <input
+                  v-model="jump.identityFile"
+                  placeholder="Blank to reuse target credentials"
+                  autocomplete="off"
+                />
+              </div>
+              <div class="field">
+                <label>{{ jump.identityFile ? 'Jump Key Passphrase' : 'Jump Password' }}</label>
+                <input
+                  v-if="jump.identityFile"
+                  v-model="jump.passphrase"
+                  type="password"
+                  placeholder="Optional"
+                />
+                <input
+                  v-else
+                  v-model="jump.password"
+                  type="password"
+                  placeholder="Blank to reuse target credentials"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="checks">
           <label class="check" :class="{ disabled: fromSshConfig }">
             <input type="checkbox" v-model="saveNode" :disabled="fromSshConfig" />
@@ -554,6 +618,9 @@ async function doConnect() {
             />
             <span class="combo-name">{{ e.name }}</span>
             <span class="combo-host">{{ e.hostname }}</span>
+            <span v-if="e.jumpHosts.length" class="combo-host">
+              via {{ e.jumpHosts.map((jump) => jump.alias || jump.host).join(' → ') }}
+            </span>
           </label>
           <div v-if="importList.length === 0" class="import-empty">No matching hosts</div>
         </div>
@@ -926,6 +993,30 @@ h2 {
   background: var(--surface);
   padding: 0 4px;
   border-radius: 3px;
+}
+
+.jump-list {
+  padding: 8px;
+  border: 1px solid var(--text-disabled);
+  border-radius: 4px;
+}
+
+.jump-heading,
+.jump-title {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.jump-heading code {
+  color: var(--accent);
+}
+
+.jump-hop {
+  margin-top: 8px;
+}
+
+.jump-title {
+  margin-bottom: 5px;
 }
 
 .error {

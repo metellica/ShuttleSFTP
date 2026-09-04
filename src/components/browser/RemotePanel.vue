@@ -1337,6 +1337,9 @@ async function ctxAddBookmark() {
     path,
     kind: activeTab.kind,
   }
+  if (params?.jumpHosts?.length) {
+    bookmark.jumpHosts = params.jumpHosts.map((jump) => ({ ...jump }))
+  }
   if (params?.auth.type === 'key') {
     bookmark.privateKeyPath = params.auth.key_path
     if (params.auth.passphrase) bookmark.passphrase = params.auth.passphrase

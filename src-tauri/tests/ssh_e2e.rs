@@ -23,6 +23,7 @@ fn ssh_env() -> Option<ConnectParams> {
         port,
         username: user,
         auth: AuthMethod::Password { password: pass },
+        jump_hosts: Vec::new(),
     })
 }
 
@@ -67,10 +68,7 @@ async fn ssh_sftp_and_exec_end_to_end() {
     // --- SshRunner: capture + streaming ------------------------------------
     let runner = SshRunner::new(ssh, "test@wsl");
     let out = runner
-        .run(
-            &shuttle_sftp::exec::argv(&["cat", "--", &f]),
-            None,
-        )
+        .run(&shuttle_sftp::exec::argv(&["cat", "--", &f]), None)
         .await
         .unwrap();
     assert!(out.success());

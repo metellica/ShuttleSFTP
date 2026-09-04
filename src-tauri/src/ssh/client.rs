@@ -10,7 +10,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::error::{AppError, AppResult};
 use crate::ssh::auth::AuthMethod;
-use crate::ssh::session::ConnectParams;
+use crate::ssh::session::{ConnectParams, JumpHost};
 
 /// Minimal russh client handler.
 pub struct ClientHandler;
@@ -176,21 +176,95 @@ const KEEPALIVE_MAX: usize = 3;
 
 /// Establish an authenticated SSH connection.
 pub async fn connect_ssh(params: &ConnectParams) -> AppResult<Arc<SshHandle>> {
+    if params.jump_hosts.is_empty() {
+        let config = ssh_config();
+        let session = russh::client::connect(config, (&*params.host, params.port), ClientHandler)
+            .await
+            .map_err(|e| AppError::ConnectionFailed(e.to_string()))?;
+        return authenticate(
+            session,
+            &params.username,
+            &params.auth,
+            &format!("{}@{}:{}", params.username, params.host, params.port),
+        )
+        .await;
+    }
+
+    let first = &params.jump_hosts[0];
+    let first_username = jump_username(first, params);
+    let first_auth = jump_auth(first, params);
     let config = ssh_config();
-    let session = russh::client::connect(config, (&*params.host, params.port), ClientHandler)
+    let session = russh::client::connect(config, (&*first.host, first.port), ClientHandler)
         .await
-        .map_err(|e| AppError::ConnectionFailed(e.to_string()))?;
-    authenticate(session, params).await
+        .map_err(|e| {
+            AppError::ConnectionFailed(format!(
+                "Cannot connect to jump host {}@{}:{}: {}",
+                first_username, first.host, first.port, e
+            ))
+        })?;
+    let mut current = authenticate(
+        session,
+        first_username,
+        &first_auth,
+        &format!("jump host {}@{}:{}", first_username, first.host, first.port),
+    )
+    .await?;
+
+    for jump in params.jump_hosts.iter().skip(1) {
+        let username = jump_username(jump, params);
+        let auth = jump_auth(jump, params);
+        current = connect_through(
+            &current,
+            &jump.host,
+            jump.port,
+            username,
+            &auth,
+            &format!("jump host {}@{}:{}", username, jump.host, jump.port),
+        )
+        .await?;
+    }
+
+    connect_through(
+        &current,
+        &params.host,
+        params.port,
+        &params.username,
+        &params.auth,
+        &format!("{}@{}:{}", params.username, params.host, params.port),
+    )
+    .await
 }
 
 /// Establish an SSH connection whose transport can be forcibly aborted.
 /// Interactive terminals use this so timeout cleanup does not depend on
 /// russh's bounded command queue or the operating system's TCP timeout.
 pub async fn connect_terminal_ssh(params: &ConnectParams) -> AppResult<TerminalSshConnection> {
+    let (first_host, first_port, first_username, first_auth, first_label) =
+        if let Some(first) = params.jump_hosts.first() {
+            let username = jump_username(first, params).to_string();
+            (
+                first.host.as_str(),
+                first.port,
+                username.clone(),
+                jump_auth(first, params),
+                format!("jump host {}@{}:{}", username, first.host, first.port),
+            )
+        } else {
+            (
+                params.host.as_str(),
+                params.port,
+                params.username.clone(),
+                params.auth.clone(),
+                format!("{}@{}:{}", params.username, params.host, params.port),
+            )
+        };
+
     let config = ssh_config();
-    let socket = tokio::net::TcpStream::connect((&*params.host, params.port))
+    let socket = tokio::net::TcpStream::connect((first_host, first_port))
         .await
-        .map_err(|e| AppError::ConnectionFailed(e.to_string()))?;
+        .map_err(|e| {
+            AppError::ConnectionFailed(format!("Cannot connect to {}: {}", first_label, e))
+        })?;
     if config.nodelay {
         socket
             .set_nodelay(true)
@@ -205,7 +279,33 @@ pub async fn connect_terminal_ssh(params: &ConnectParams) -> AppResult<TerminalS
     let session = russh::client::connect_stream(config, stream, ClientHandler)
         .await
         .map_err(|e| AppError::ConnectionFailed(e.to_string()))?;
-    let handle = authenticate(session, params).await?;
+    let mut handle = authenticate(session, &first_username, &first_auth, &first_label).await?;
+
+    if !params.jump_hosts.is_empty() {
+        for jump in params.jump_hosts.iter().skip(1) {
+            let username = jump_username(jump, params);
+            let auth = jump_auth(jump, params);
+            handle = connect_through(
+                &handle,
+                &jump.host,
+                jump.port,
+                username,
+                &auth,
+                &format!("jump host {}@{}:{}", username, jump.host, jump.port),
+            )
+            .await?;
+        }
+        handle = connect_through(
+            &handle,
+            &params.host,
+            params.port,
+            &params.username,
+            &params.auth,
+            &format!("{}@{}:{}", params.username, params.host, params.port),
+        )
+        .await?;
+    }
+
     abort_on_drop.disarm();
     Ok(TerminalSshConnection {
         inner: Arc::new(TerminalSshConnectionInner { handle, abort }),
@@ -216,38 +316,97 @@ fn ssh_config() -> Arc<russh::client::Config> {
     Arc::new(russh::client::Config {
         keepalive_interval: Some(KEEPALIVE_INTERVAL),
         keepalive_max: KEEPALIVE_MAX,
+        nodelay: true,
         ..Default::default()
     })
 }
 
-async fn authenticate(mut session: SshHandle, params: &ConnectParams) -> AppResult<Arc<SshHandle>> {
-    let auth_result = match &params.auth {
+async fn connect_through(
+    jump_session: &SshHandle,
+    host: &str,
+    port: u16,
+    username: &str,
+    auth: &AuthMethod,
+    label: &str,
+) -> AppResult<Arc<SshHandle>> {
+    let channel = jump_session
+        .channel_open_direct_tcpip(host, port.into(), "127.0.0.1", 0)
+        .await
+        .map_err(|e| {
+            AppError::ConnectionFailed(format!("Cannot open tunnel to {}: {}", label, e))
+        })?;
+    let session = russh::client::connect_stream(ssh_config(), channel.into_stream(), ClientHandler)
+        .await
+        .map_err(|e| {
+            AppError::ConnectionFailed(format!("SSH handshake with {} failed: {}", label, e))
+        })?;
+    authenticate(session, username, auth, label).await
+}
+
+fn jump_username<'a>(jump: &'a JumpHost, params: &'a ConnectParams) -> &'a str {
+    jump.username.as_deref().unwrap_or(&params.username)
+}
+
+fn jump_auth(jump: &JumpHost, params: &ConnectParams) -> AuthMethod {
+    match &jump.identity_file {
+        Some(key_path) => AuthMethod::PrivateKey {
+            key_path: key_path.clone(),
+            passphrase: jump.passphrase.clone().or_else(|| match &params.auth {
+                AuthMethod::PrivateKey {
+                    key_path: target_key,
+                    passphrase,
+                } if target_key == key_path => passphrase.clone(),
+                _ => None,
+            }),
+        },
+        None => jump
+            .password
+            .as_ref()
+            .map(|password| AuthMethod::Password {
+                password: password.clone(),
+            })
+            .unwrap_or_else(|| params.auth.clone()),
+    }
+}
+
+async fn authenticate(
+    mut session: SshHandle,
+    username: &str,
+    auth: &AuthMethod,
+    label: &str,
+) -> AppResult<Arc<SshHandle>> {
+    let auth_result = match auth {
         AuthMethod::Password { password } => session
-            .authenticate_password(&params.username, password)
+            .authenticate_password(username, password)
             .await
-            .map_err(|e| AppError::AuthFailed(e.to_string()))?,
+            .map_err(|e| AppError::AuthFailed(format!("{}: {}", label, e)))?,
         AuthMethod::PrivateKey {
             key_path,
             passphrase,
         } => {
-            let key_data = tokio::fs::read_to_string(key_path)
-                .await
-                .map_err(|e| AppError::AuthFailed(format!("Cannot read key file: {}", e)))?;
+            let key_data = tokio::fs::read_to_string(key_path).await.map_err(|e| {
+                AppError::AuthFailed(format!(
+                    "{}: cannot read key file {}: {}",
+                    label, key_path, e
+                ))
+            })?;
 
             let key_pair = if let Some(pass) = passphrase {
-                decode_secret_key(&key_data, Some(pass))
-                    .map_err(|e| AppError::AuthFailed(format!("Key decode error: {}", e)))?
+                decode_secret_key(&key_data, Some(pass)).map_err(|e| {
+                    AppError::AuthFailed(format!("{}: key decode error: {}", label, e))
+                })?
             } else {
-                decode_secret_key(&key_data, None)
-                    .map_err(|e| AppError::AuthFailed(format!("Key decode error: {}", e)))?
+                decode_secret_key(&key_data, None).map_err(|e| {
+                    AppError::AuthFailed(format!("{}: key decode error: {}", label, e))
+                })?
             };
 
             let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key_pair), None);
 
             session
-                .authenticate_publickey(&params.username, key_with_alg)
+                .authenticate_publickey(username, key_with_alg)
                 .await
-                .map_err(|e| AppError::AuthFailed(e.to_string()))?
+                .map_err(|e| AppError::AuthFailed(format!("{}: {}", label, e)))?
         }
         AuthMethod::Agent => {
             return Err(AppError::AuthFailed(
@@ -257,9 +416,10 @@ async fn authenticate(mut session: SshHandle, params: &ConnectParams) -> AppResu
     };
 
     if !auth_result.success() {
-        return Err(AppError::AuthFailed(
-            "Authentication rejected by server".into(),
-        ));
+        return Err(AppError::AuthFailed(format!(
+            "{}: authentication rejected by server",
+            label
+        )));
     }
 
     Ok(Arc::new(session))

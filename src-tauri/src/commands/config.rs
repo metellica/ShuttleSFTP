@@ -56,7 +56,8 @@ pub fn save_bookmark(bookmark: Bookmark) -> AppResult<()> {
             || (b.host == bookmark.host
                 && b.port == bookmark.port
                 && b.username == bookmark.username
-                && b.path == bookmark.path)
+                && b.path == bookmark.path
+                && same_jump_route(&b.jump_hosts, &bookmark.jump_hosts))
     }) {
         let id = existing.id.clone();
         *existing = bookmark;
@@ -65,6 +66,19 @@ pub fn save_bookmark(bookmark: Bookmark) -> AppResult<()> {
         bookmarks.push(bookmark);
     }
     bookmarks::save_bookmarks(&bookmarks)
+}
+
+fn same_jump_route(
+    left: &[crate::ssh::session::JumpHost],
+    right: &[crate::ssh::session::JumpHost],
+) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right).all(|(left, right)| {
+            left.host == right.host
+                && left.port == right.port
+                && left.username == right.username
+                && left.identity_file == right.identity_file
+        })
 }
 
 #[tauri::command]

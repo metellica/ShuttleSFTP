@@ -1,6 +1,6 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::error::{AppError, AppResult};
@@ -12,13 +12,34 @@ use crate::ssh::auth::AuthMethod;
 use crate::ssh::client::SshHandle;
 use crate::ssh::sftp::SftpClient;
 
+/// One SSH hop used to reach the final target.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JumpHost {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+    pub host: String,
+    pub port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passphrase: Option<String>,
+}
+
 /// Connection parameters from the frontend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConnectParams {
     pub host: String,
     pub port: u16,
     pub username: String,
     pub auth: AuthMethod,
+    #[serde(default)]
+    pub jump_hosts: Vec<JumpHost>,
 }
 
 /// What kind of endpoint a session browses. Containers and pods are
@@ -51,6 +72,7 @@ fn local_params() -> ConnectParams {
         port: 0,
         username: String::new(),
         auth: AuthMethod::Agent,
+        jump_hosts: Vec::new(),
     }
 }
 
@@ -85,7 +107,12 @@ impl SessionManager {
         ));
         let fs = HostFs::new(Arc::new(sftp), runner.clone(), Some(ssh.clone()));
 
-        log::info!("Connected to {}@{}:{}", params.username, params.host, params.port);
+        log::info!(
+            "Connected to {}@{}:{}",
+            params.username,
+            params.host,
+            params.port
+        );
         self.insert(RemoteSession {
             id: session_id.clone(),
             kind: SessionKind::Ssh,
