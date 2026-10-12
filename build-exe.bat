@@ -18,6 +18,9 @@ if errorlevel 1 (
 
 echo === Building backend (cargo build --release) ===
 cd src-tauri
+rem NASM is not installed on this machine; aws-lc-sys fetches a prebuilt NASM
+rem binary when this is set (a plain build fails on a clean target dir).
+set "AWS_LC_SYS_PREBUILT_NASM=1"
 cargo build --release --features custom-protocol
 if errorlevel 1 (
     echo Backend build failed.
