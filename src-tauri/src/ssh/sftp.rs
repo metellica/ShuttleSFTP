@@ -139,8 +139,15 @@ impl RemoteFs for SftpClient {
             let full_path = crate::fs::join_path(path, &name);
 
             let attrs = entry.metadata();
-            let is_dir = attrs.is_dir();
-            let size = attrs.len();
+            let mut is_dir = attrs.is_dir();
+            let mut size = attrs.len();
+            if attrs.is_symlink() {
+                // Follow the link so directory links are navigable; broken links stay as files.
+                if let Ok(target) = self.sftp.metadata(&full_path).await {
+                    is_dir = target.is_dir();
+                    size = target.len();
+                }
+            }
             let modified = attrs.modified()
                 .ok()
                 .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
