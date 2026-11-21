@@ -191,7 +191,7 @@ async function remove(bm: Bookmark) {
         <button class="tab" :class="{ active: tab === 'bookmarks' }" @click="tab = 'bookmarks'">
           Bookmarks
         </button>
-        <span class="hint">Ctrl+G searches both</span>
+        <span class="hint">Ctrl+P searches both</span>
         <button
           v-if="tab === 'recent' && recent.entries.length"
           class="tab-link"
@@ -245,7 +245,7 @@ async function remove(bm: Bookmark) {
                 </div>
               </div>
               <div v-if="group.total > group.items.length" class="more">
-                +{{ group.total - group.items.length }} more — Ctrl+G to search
+                +{{ group.total - group.items.length }} more — Ctrl+P to search
               </div>
             </template>
           </template>

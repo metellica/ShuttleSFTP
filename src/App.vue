@@ -312,8 +312,8 @@ function startSplitDrag() {
 
 function onKeyDown(e: KeyboardEvent) {
   const mod = e.ctrlKey || e.metaKey
-  // Ctrl+G jumps to a recent folder on any server
-  if (mod && e.key.toLowerCase() === 'g') {
+  // Ctrl+P jumps to a recent folder on any server (overrides the browser print dialog)
+  if (mod && e.key.toLowerCase() === 'p') {
     e.preventDefault()
     showQuickJump.value = true
     return
