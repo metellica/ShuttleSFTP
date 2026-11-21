@@ -26,7 +26,7 @@ const theme = useThemeStore()
       <span>⚡</span> Connect
     </button>
     <button class="btn" @click="emit('bookmarks')">
-      <span>⭐</span> Bookmarks
+      <span>⭐</span> Recent & Bookmarks
     </button>
     <button class="btn" @click="emit('upload')">
       <span>⬆</span> Upload

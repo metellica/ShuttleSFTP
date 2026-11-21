@@ -5,6 +5,7 @@ import TabBar from '@/components/layout/TabBar.vue'
 import Toolbar from '@/components/layout/Toolbar.vue'
 import ConnectDialog from '@/components/connection/ConnectDialog.vue'
 import BookmarksDialog from '@/components/connection/BookmarksDialog.vue'
+import QuickJump from '@/components/connection/QuickJump.vue'
 import RemotePanel from '@/components/browser/RemotePanel.vue'
 import TransferQueue from '@/components/transfer/TransferQueue.vue'
 import PrepareOverlay from '@/components/layout/PrepareOverlay.vue'
@@ -12,7 +13,7 @@ import TerminalPanel from '@/components/terminal/TerminalPanel.vue'
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { uploadFiles, downloadFiles, mkDir, listBookmarks } from '@/composables/useTauri'
+import { uploadFiles, downloadFiles, mkDir, listBookmarks, listRecent } from '@/composables/useTauri'
 import { promptText } from '@/composables/usePrompt'
 import { useTransferStore } from '@/stores/transfer'
 import { usePrepareStore, type PrepareProgressEvent } from '@/stores/prepare'
@@ -26,6 +27,7 @@ const prepareStore = usePrepareStore()
 const view = useViewSettingsStore()
 const showConnectDialog = ref(false)
 const showBookmarksDialog = ref(false)
+const showQuickJump = ref(false)
 const unlisteners: UnlistenFn[] = []
 const terminalsStore = useTerminalsStore()
 const contentRef = ref<HTMLElement | null>(null)
@@ -101,8 +103,8 @@ onMounted(async () => {
   if (tabsStore.tabs.length === 0) {
     tabsStore.addTab()
     try {
-      const bookmarks = await listBookmarks()
-      if (bookmarks.length > 0) {
+      const [bookmarks, recentDirs] = await Promise.all([listBookmarks(), listRecent()])
+      if (bookmarks.length > 0 || recentDirs.length > 0) {
         showBookmarksDialog.value = true
       } else {
         showConnectDialog.value = true
@@ -310,6 +312,12 @@ function startSplitDrag() {
 
 function onKeyDown(e: KeyboardEvent) {
   const mod = e.ctrlKey || e.metaKey
+  // Ctrl+G jumps to a recent folder on any server
+  if (mod && e.key.toLowerCase() === 'g') {
+    e.preventDefault()
+    showQuickJump.value = true
+    return
+  }
   // Ctrl+\ toggles the split
   if (mod && e.key === '\\') {
     e.preventDefault()
@@ -369,6 +377,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeyDown))
     <TerminalPanel />
     <TransferQueue />
     <PrepareOverlay />
+    <QuickJump :open="showQuickJump" @close="showQuickJump = false" />
     <ConnectDialog
       v-if="showConnectDialog"
       @close="showConnectDialog = false"

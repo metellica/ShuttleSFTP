@@ -7,13 +7,19 @@ import {
   connectLocal,
 } from '@/composables/useTauri'
 import { promptText } from '@/composables/usePrompt'
-import type { Bookmark, ConnectParams, ConnectedMeta } from '@/types/connection'
+import { jumpToRecent } from '@/composables/useRemoteJump'
+import { useRecentStore } from '@/stores/recent'
+import type { Bookmark, ConnectParams, ConnectedMeta, RecentDir } from '@/types/connection'
 import { LOCAL_TAB_LABEL } from '@/types/connection'
 
 const emit = defineEmits<{
   close: []
   connected: [sessionId: string, label: string, path: string, meta: ConnectedMeta]
 }>()
+
+const recent = useRecentStore()
+const tab = ref<'recent' | 'bookmarks'>('recent')
+const openRecent = ref(new Set<string>())
 
 const bookmarks = ref<Bookmark[]>([])
 const connectingId = ref<string | null>(null)
@@ -72,7 +78,37 @@ onMounted(async () => {
   } catch (e) {
     // Bookmarks file may not exist yet
   }
+  try {
+    await recent.refresh()
+  } catch (e) {
+    // History is a convenience
+  }
+  // Servers used lately start open; long-idle ones stay folded.
+  openRecent.value = new Set(recent.groups.filter((g) => !g.dormant).map((g) => g.serverKey))
+  if (recent.entries.length === 0) tab.value = 'bookmarks'
 })
+
+async function openRecentDir(entry: RecentDir) {
+  if (connectingId.value) return
+  error.value = ''
+  connectingId.value = entry.serverKey + entry.path
+  try {
+    const failure = await jumpToRecent(entry, entry.path)
+    if (failure) error.value = failure
+    else emit('close')
+  } finally {
+    connectingId.value = null
+  }
+}
+
+function toggleRecentGroup(key: string) {
+  if (openRecent.value.has(key)) openRecent.value.delete(key)
+  else openRecent.value.add(key)
+}
+
+function idleDays(lastVisit: number): number {
+  return Math.floor((Date.now() / 1000 - lastVisit) / 86_400)
+}
 
 async function buildParams(bm: Bookmark): Promise<ConnectParams | null> {
   let auth: ConnectParams['auth']
@@ -146,8 +182,77 @@ async function remove(bm: Bookmark) {
 <template>
   <div class="overlay" @click.self="emit('close')">
     <div class="dialog">
-      <h2>⭐ Bookmarks</h2>
+      <h2>{{ tab === 'recent' ? '🕘 Recent' : '⭐ Bookmarks' }}</h2>
 
+      <div class="tabs">
+        <button class="tab" :class="{ active: tab === 'recent' }" @click="tab = 'recent'">
+          Recent
+        </button>
+        <button class="tab" :class="{ active: tab === 'bookmarks' }" @click="tab = 'bookmarks'">
+          Bookmarks
+        </button>
+        <span class="hint">Ctrl+G searches both</span>
+        <button
+          v-if="tab === 'recent' && recent.entries.length"
+          class="tab-link"
+          @click="recent.clear()"
+        >
+          clear
+        </button>
+      </div>
+
+      <template v-if="tab === 'recent'">
+        <div v-if="recent.entries.length === 0" class="empty">
+          Folders you browse show up here, grouped by server. What you stop using fades
+          after a week or so; pin 📌 keeps one.
+        </div>
+        <div v-else class="list">
+          <template v-for="group in recent.groups" :key="group.serverKey">
+            <div class="server-row" @click="toggleRecentGroup(group.serverKey)">
+              <span class="server-toggle">{{ openRecent.has(group.serverKey) ? '▾' : '▸' }}</span>
+              <span class="kind-icon">{{ group.kind === 'local' ? '💻' : '⌁' }}</span>
+              <span class="server-label" :title="group.label">{{ group.label }}</span>
+              <span v-if="group.dormant" class="server-idle">
+                idle {{ idleDays(group.lastVisit) }}d
+              </span>
+              <span class="server-count">{{ group.total }}</span>
+            </div>
+            <template v-if="openRecent.has(group.serverKey)">
+              <div v-for="item in group.items" :key="item.path" class="item">
+                <div class="info" @dblclick="openRecentDir(item)">
+                  <div class="alias" :title="item.name">{{ item.name }}</div>
+                  <div class="detail" :title="item.path">
+                    <span class="path">{{ item.path }}</span>
+                  </div>
+                </div>
+                <div class="item-actions">
+                  <button
+                    class="btn pin"
+                    :class="{ on: item.pinned }"
+                    title="Pin"
+                    @click="recent.togglePin(item)"
+                  >
+                    📌
+                  </button>
+                  <button
+                    class="btn primary"
+                    :disabled="connectingId !== null"
+                    @click="openRecentDir(item)"
+                  >
+                    {{ connectingId === item.serverKey + item.path ? 'Opening…' : 'Open' }}
+                  </button>
+                  <button class="btn danger" title="Forget" @click="recent.remove(item)">🗑</button>
+                </div>
+              </div>
+              <div v-if="group.total > group.items.length" class="more">
+                +{{ group.total - group.items.length }} more — Ctrl+G to search
+              </div>
+            </template>
+          </template>
+        </div>
+      </template>
+
+      <template v-else>
       <div v-if="bookmarks.length === 0" class="empty">
         No bookmarks yet. Right-click a remote folder and choose "Add Bookmark".
       </div>
@@ -192,6 +297,7 @@ async function remove(bm: Bookmark) {
           </template>
         </template>
       </div>
+      </template>
 
       <div v-if="error" class="error">{{ error }}</div>
 
@@ -235,6 +341,72 @@ h2 {
   color: var(--text-muted);
   font-size: 13px;
   text-align: center;
+}
+
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.tab {
+  background: var(--surface);
+  border: 1px solid var(--text-disabled);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  padding: 3px 12px;
+  cursor: pointer;
+}
+
+.tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.hint {
+  flex: 1;
+  text-align: right;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.tab-link {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.tab-link:hover {
+  color: var(--accent);
+}
+
+.server-idle {
+  color: var(--text-muted);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.more {
+  margin-left: 22px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.btn.pin {
+  background: var(--surface);
+  filter: grayscale(1);
+  opacity: 0.6;
+}
+
+.btn.pin.on {
+  filter: none;
+  opacity: 1;
 }
 
 .list {

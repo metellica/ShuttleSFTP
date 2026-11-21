@@ -62,6 +62,11 @@ fn main() {
             shuttle_sftp::commands::config::list_bookmarks,
             shuttle_sftp::commands::config::save_bookmark,
             shuttle_sftp::commands::config::delete_bookmark,
+            shuttle_sftp::commands::config::list_recent,
+            shuttle_sftp::commands::config::record_visit,
+            shuttle_sftp::commands::config::toggle_pin_recent,
+            shuttle_sftp::commands::config::remove_recent,
+            shuttle_sftp::commands::config::clear_recent,
         ])
         .run(tauri::generate_context!())
         .expect("error while running ShuttleSFTP");

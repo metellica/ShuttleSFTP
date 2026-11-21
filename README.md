@@ -29,6 +29,8 @@ A fast, lightweight, cross-platform SFTP/SCP GUI built with **Tauri 2 + Vue 3 + 
 - 🔁 **Resume After Restart** — Interrupted transfers persist and come back as paused; resume auto-reconnects using saved credentials and opens the matching tab
 - 🧹 **Safe Cancel** — Cancelling a download asks whether to delete the partial local file (or the whole folder for directory downloads)
 - ⭐ **Bookmarks** — Right-click any remote folder to bookmark it (with custom alias); the bookmarks window groups paths per server (collapsible tree), and connecting opens a tab labeled `user@alias`
+- 🕘 **Recent Folders (frecency)** — With many servers and folders that are busy for ~10 days and then forgotten, bookmarking everything doesn't work, so every folder you browse is remembered per server and ranked by visits weighted with a one-week half-life: it fades by itself, 📌 pin keeps it. The **Recent & Bookmarks** window opens on a per-server list (servers idle for two weeks start folded); history is capped per server so one busy host can't crowd out the rest
+- ⚡ **Quick Jump** — `Ctrl+G` searches recent folders and bookmarks of every server at once; `@prod logs` narrows to servers matching "prod". Enter switches to the tab already connected to that server, or connects with saved credentials (profile → bookmark → `~/.ssh/config`, asking for the password when only a password-less login is saved)
 - 🖥️ **Integrated Terminal** — Toolbar button opens a shell in the current directory (local PTY or SSH); browsing inside a container or pod auto-attaches via `docker`/`nerdctl`/`crictl`/`kubectl exec`. Multiple terminals per tab (each tab keeps its own set), resizable drawer height
 - 🔑 **Flexible Auth** — Password, private key (with passphrase), SSH agent
 - 📋 **SSH Config Import** — Pick which `~/.ssh/config` hosts to import (checkbox picker with filter), including single-hop and multi-hop `ProxyJump` routes; only imported hosts appear in the fuzzy-search dropdown
@@ -179,6 +181,7 @@ All settings are stored as plain JSON under `~/.config/shuttle-sftp/` on every p
 |------|----------|
 | `profiles.json` | Saved connection profiles |
 | `bookmarks.json` | Bookmarked remote paths |
+| `recent.json` | Visited folders per server (up to 800, 80 per server), ranked by frecency; pinned entries are kept. Holds no credentials |
 | `imported_ssh_hosts.json` | `~/.ssh/config` hosts imported into the connect dialog |
 | `transfers.json` | Transfer queue state (enables resume after restart) |
 

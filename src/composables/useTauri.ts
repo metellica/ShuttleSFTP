@@ -8,6 +8,8 @@ import type {
   SshHostEntry,
   ConnectionProfile,
   Bookmark,
+  RecentDir,
+  ServerRef,
 } from '@/types/connection'
 import type { FileEntry, FilePreview } from '@/types/filesystem'
 import type { TransferTask } from '@/types/transfer'
@@ -214,3 +216,17 @@ export const saveBookmark = (bookmark: Bookmark) =>
 
 export const deleteBookmark = (bookmarkId: string) =>
   invoke<void>('delete_bookmark', { bookmarkId })
+
+// Recent folders (frecency history)
+export const listRecent = () => invoke<RecentDir[]>('list_recent')
+
+export const recordVisit = (server: ServerRef, path: string) =>
+  invoke<void>('record_visit', { server, path })
+
+export const togglePinRecent = (server: ServerRef, path: string) =>
+  invoke<RecentDir[]>('toggle_pin_recent', { server, path })
+
+export const removeRecent = (serverKey: string, path: string) =>
+  invoke<RecentDir[]>('remove_recent', { serverKey, path })
+
+export const clearRecent = () => invoke<RecentDir[]>('clear_recent')

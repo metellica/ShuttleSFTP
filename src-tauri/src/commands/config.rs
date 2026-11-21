@@ -1,5 +1,6 @@
 use crate::config::bookmarks::{self, Bookmark};
 use crate::config::profiles::{self, ConnectionProfile};
+use crate::config::recent::{self, RecentDir, ServerRef};
 use crate::config::ssh_config::{self, SshHostEntry};
 use crate::error::AppResult;
 
@@ -86,4 +87,29 @@ pub fn delete_bookmark(bookmark_id: String) -> AppResult<()> {
     let mut bookmarks = bookmarks::load_bookmarks().unwrap_or_default();
     bookmarks.retain(|b| b.id != bookmark_id);
     bookmarks::save_bookmarks(&bookmarks)
+}
+
+#[tauri::command]
+pub fn list_recent() -> AppResult<Vec<RecentDir>> {
+    recent::list_recent()
+}
+
+#[tauri::command]
+pub fn record_visit(server: ServerRef, path: String) -> AppResult<()> {
+    recent::record_visit(server, &path)
+}
+
+#[tauri::command]
+pub fn toggle_pin_recent(server: ServerRef, path: String) -> AppResult<Vec<RecentDir>> {
+    recent::toggle_pin(server, &path)
+}
+
+#[tauri::command]
+pub fn remove_recent(server_key: String, path: String) -> AppResult<Vec<RecentDir>> {
+    recent::remove_recent(&server_key, &path)
+}
+
+#[tauri::command]
+pub fn clear_recent() -> AppResult<Vec<RecentDir>> {
+    recent::clear_recent()
 }

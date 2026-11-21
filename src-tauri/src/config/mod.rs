@@ -1,6 +1,7 @@
 pub mod ssh_config;
 pub mod profiles;
 pub mod bookmarks;
+pub mod recent;
 
 use std::path::PathBuf;
 

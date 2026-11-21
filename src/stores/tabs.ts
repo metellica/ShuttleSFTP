@@ -1,6 +1,33 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { ConnectParams, SessionKind } from '@/types/connection'
+import type { ConnectParams, ServerRef, SessionKind } from '@/types/connection'
+import { recordVisit } from '@/composables/useTauri'
+
+/** The endpoint a tab is browsing, or null while it has none to name. */
+export function serverRefOf(tab: Tab): ServerRef | null {
+  if (tab.kind === 'local') {
+    return { serverKey: 'local', label: tab.label, kind: 'local', host: 'local', port: 0, username: '' }
+  }
+  const p = tab.connectParams
+  if (!p) return null
+  return {
+    serverKey: `${p.username}@${p.host}:${p.port}`,
+    label: tab.label,
+    kind: 'ssh',
+    host: p.host,
+    port: p.port,
+    username: p.username,
+  }
+}
+
+/** Feed the frecency history; the root says nothing about what you use. */
+function recordTabVisit(tab: Tab) {
+  const server = serverRefOf(tab)
+  if (!server || tab.currentPath === '/') return
+  recordVisit(server, tab.currentPath).catch(() => {
+    // History is a convenience; a failed write must not break navigation.
+  })
+}
 
 export interface Tab {
   id: string
@@ -171,19 +198,22 @@ export const useTabsStore = defineStore('tabs', () => {
   function updateTab(tabId: string, updates: Partial<Tab>) {
     const tab = findTab(tabId)
     if (!tab) return
-    if (updates.sessionId !== undefined && updates.sessionId !== tab.sessionId) {
+    const sessionChanged =
+      updates.sessionId !== undefined && updates.sessionId !== tab.sessionId
+    const moved = !sessionChanged && updates.currentPath !== undefined && updates.currentPath !== tab.currentPath
+    if (sessionChanged) {
       const start = updates.currentPath ?? tab.currentPath
       tab.history = [start]
       tab.historyIndex = 0
-    } else if (
-      updates.currentPath !== undefined &&
-      updates.currentPath !== tab.currentPath
-    ) {
+    } else if (moved) {
       tab.history = tab.history.slice(0, tab.historyIndex + 1)
-      tab.history.push(updates.currentPath)
+      tab.history.push(updates.currentPath!)
       tab.historyIndex = tab.history.length - 1
     }
     Object.assign(tab, updates)
+    if ((sessionChanged || moved) && tab.status === 'connected' && tab.sessionId) {
+      recordTabVisit(tab)
+    }
   }
 
   function goBack() {

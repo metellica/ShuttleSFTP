@@ -92,3 +92,25 @@ export interface Bookmark {
   /** Endpoint type; missing means classic SSH bookmark. */
   kind?: SessionKind
 }
+
+/** Which endpoint a remembered folder lives on; carries no credentials. */
+export interface ServerRef {
+  /** `local` or `user@host:port`. */
+  serverKey: string
+  /** Tab label (`user@alias`), the group title. */
+  label: string
+  kind: SessionKind
+  host: string
+  port: number
+  username: string
+}
+
+/** A remembered folder, ranked by frecency (visits weighted by recency). */
+export interface RecentDir extends ServerRef {
+  path: string
+  name: string
+  visits: number
+  lastVisit: number
+  pinned: boolean
+  score: number
+}
