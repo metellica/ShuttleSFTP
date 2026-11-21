@@ -162,6 +162,11 @@ function onNewTab() {
   showConnectDialog.value = true
 }
 
+function onPaneNewTab(paneId: string) {
+  tabsStore.addTabIn(paneId)
+  showQuickJump.value = true
+}
+
 function onShowConnect() {
   showConnectDialog.value = true
 }
@@ -334,7 +339,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeyDown))
     <div class="tab-bars" :style="{ gridTemplateColumns: columns }">
       <template v-for="(pane, index) in tabsStore.panes" :key="pane.id">
         <div v-if="index > 0" class="tab-bars-gap" />
-        <TabBar :pane="pane" @new-tab="tabsStore.addTabIn(pane.id)" />
+        <TabBar :pane="pane" @new-tab="onPaneNewTab(pane.id)" />
       </template>
     </div>
     <Toolbar
