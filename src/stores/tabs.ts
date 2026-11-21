@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { ConnectParams, ServerRef, SessionKind } from '@/types/connection'
-import { recordVisit } from '@/composables/useTauri'
+import { recordVisit, listDir } from '@/composables/useTauri'
 
 /** The endpoint a tab is browsing, or null while it has none to name. */
 export function serverRefOf(tab: Tab): ServerRef | null {
@@ -24,9 +24,15 @@ export function serverRefOf(tab: Tab): ServerRef | null {
 function recordTabVisit(tab: Tab) {
   const server = serverRefOf(tab)
   if (!server || tab.currentPath === '/') return
-  recordVisit(server, tab.currentPath).catch(() => {
-    // History is a convenience; a failed write must not break navigation.
-  })
+  const sessionId = tab.sessionId
+  const path = tab.currentPath
+  if (!sessionId) return
+  // Only folders that can actually be listed are worth remembering.
+  listDir(sessionId, path)
+    .then(() => recordVisit(server, path))
+    .catch(() => {
+      // History is a convenience; invalid paths and failed writes are ignored.
+    })
 }
 
 export interface Tab {

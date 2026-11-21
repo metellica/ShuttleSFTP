@@ -4,7 +4,7 @@ import { listBookmarks } from '@/composables/useTauri'
 import { jumpToRecent } from '@/composables/useRemoteJump'
 import { useRecentStore } from '@/stores/recent'
 import { LOCAL_TAB_LABEL } from '@/types/connection'
-import type { Bookmark, ServerRef } from '@/types/connection'
+import type { Bookmark, RecentDir, ServerRef } from '@/types/connection'
 
 const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ close: [] }>()
@@ -111,6 +111,25 @@ function move(delta: number) {
   })
 }
 
+async function removeAt(index: number) {
+  const hit = results.value[index]
+  if (!hit || hit.pinned) return
+  try {
+    await recent.remove(hit as unknown as RecentDir)
+  } catch (e) {
+    error.value = String(e)
+  }
+  const n = results.value.length
+  if (selected.value >= n) selected.value = Math.max(0, n - 1)
+}
+
+function onDelete(e: KeyboardEvent) {
+  // Plain Delete edits text; Ctrl+Delete always removes the selected entry.
+  if (query.value && !e.ctrlKey) return
+  e.preventDefault()
+  removeAt(selected.value)
+}
+
 async function accept(index: number) {
   const hit = results.value[index]
   if (!hit || busy.value) return
@@ -137,6 +156,7 @@ async function accept(index: number) {
         @keydown.down.prevent="move(1)"
         @keydown.up.prevent="move(-1)"
         @keydown.enter.prevent="accept(selected)"
+        @keydown.delete="onDelete"
       />
       <div v-if="error" class="error">{{ error }}</div>
       <ul v-if="results.length" ref="listRef">
@@ -151,6 +171,12 @@ async function accept(index: number) {
           <span class="name">{{ c.pinned ? '📌 ' : '' }}{{ c.name }}</span>
           <span class="host">{{ c.label }}</span>
           <span class="path">{{ c.path }}</span>
+          <button
+            v-if="!c.pinned"
+            class="del"
+            title="Remove from history (Ctrl+Delete)"
+            @click.stop="removeAt(i)"
+          >×</button>
         </li>
       </ul>
       <div v-else class="empty">No matching folders yet — they appear as you browse</div>
@@ -207,6 +233,7 @@ ul {
 }
 
 li {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas: 'name host' 'path path';
@@ -244,6 +271,30 @@ li.active {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.del {
+  position: absolute;
+  right: 6px;
+  bottom: 3px;
+  display: none;
+  background: var(--bg-panel);
+  border: none;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 1px 6px;
+}
+
+li:hover .del,
+li.active .del {
+  display: block;
+}
+
+.del:hover {
+  color: var(--error);
 }
 
 .empty {
