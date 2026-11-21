@@ -48,7 +48,17 @@ export const useTransferStore = defineStore('transfer', () => {
     bump()
   }
 
+  // Updates that arrive while a sync is awaiting the backend snapshot. The
+  // snapshot may predate them (e.g. a small upload finishing mid-sync), so
+  // they are replayed onto the fresh list; otherwise the task would stay
+  // "active" forever.
+  let syncsInFlight = 0
+  const updatesDuringSync = new Map<string, Partial<TransferTask>>()
+
   function updateTask(taskId: string, updates: Partial<TransferTask>) {
+    if (syncsInFlight > 0) {
+      updatesDuringSync.set(taskId, { ...updatesDuringSync.get(taskId), ...updates })
+    }
     const task = byId.get(taskId)
     if (task) {
       Object.assign(task, updates)
@@ -83,8 +93,18 @@ export const useTransferStore = defineStore('transfer', () => {
 
   /** Pull the authoritative task list from the backend. */
   async function syncTasks() {
-    _tasks.value = await listTransfers()
-    reindex()
+    syncsInFlight++
+    try {
+      const fresh = await listTransfers()
+      _tasks.value = fresh
+      reindex()
+      for (const [id, updates] of updatesDuringSync) {
+        const task = byId.get(id)
+        if (task) Object.assign(task, updates)
+      }
+    } finally {
+      if (--syncsInFlight === 0) updatesDuringSync.clear()
+    }
     version.value++
   }
 

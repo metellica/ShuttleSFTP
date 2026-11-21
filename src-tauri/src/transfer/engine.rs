@@ -203,7 +203,10 @@ fn schedule_persist(tasks: &TaskMap) {
 /// endpoints (local machine, SSH hosts, containers, pods).
 pub struct TransferEngine {
     tasks: Arc<Mutex<HashMap<String, TransferTask>>>,
-    semaphore: Arc<Semaphore>,
+    /// Concurrency limit applied per session, so transfers of one tab never
+    /// queue behind those of another.
+    semaphores: Arc<std::sync::Mutex<HashMap<String, Arc<Semaphore>>>>,
+    max_concurrent: usize,
     /// Task ids whose transfer loop is currently running (file handles open).
     running: RunningSet,
     /// group_id -> local root dir to delete once no group member is running.
@@ -214,7 +217,8 @@ impl TransferEngine {
     pub fn new(max_concurrent: usize) -> Self {
         Self {
             tasks: Arc::new(Mutex::new(load_persisted_tasks())),
-            semaphore: Arc::new(Semaphore::new(max_concurrent)),
+            semaphores: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            max_concurrent,
             running: Arc::new(Mutex::new(HashSet::new())),
             pending_group_deletes: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -362,7 +366,20 @@ impl TransferEngine {
 
     fn spawn_transfer(&self, app: tauri::AppHandle, src: Endpoint, dst: Endpoint, task_id: String) {
         let tasks = self.tasks.clone();
-        let semaphore = self.semaphore.clone();
+        // Remote side of the transfer decides the queue: the destination
+        // for uploads, the source otherwise.
+        let session_key = match (&src, &dst) {
+            (Endpoint::Local, _) => dst.session_id(),
+            _ => src.session_id(),
+        }
+        .unwrap_or_default();
+        let semaphore = self
+            .semaphores
+            .lock()
+            .unwrap()
+            .entry(session_key)
+            .or_insert_with(|| Arc::new(Semaphore::new(self.max_concurrent)))
+            .clone();
         let running = self.running.clone();
         let pending_deletes = self.pending_group_deletes.clone();
 

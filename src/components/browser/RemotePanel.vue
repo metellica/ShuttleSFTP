@@ -42,6 +42,7 @@ const selectedPaths = ref<Set<string>>(new Set())
 /** Anchor for shift+click range selection (colIndex is null in list view). */
 const selectionAnchor = ref<{ colIndex: number | null; path: string } | null>(null)
 const bodyEl = ref<HTMLElement | null>(null)
+const panelEl = ref<HTMLElement | null>(null)
 const listViewEl = ref<HTMLElement | null>(null)
 
 type ViewMode = 'columns' | 'list'
@@ -1457,11 +1458,23 @@ onMounted(async () => {
   // Registered by hand: a passive listener could not call preventDefault,
   // and the browser would zoom the whole page instead.
   bodyEl.value?.addEventListener('wheel', onZoomWheel, { passive: false })
+  // Every pane has its own panel and all of them receive the window-wide
+  // drag events, so each must ignore drops landing outside its own bounds.
+  const isOverPanel = (pos: { x: number; y: number }) => {
+    const rect = panelEl.value?.getBoundingClientRect()
+    if (!rect) return false
+    const ratio = window.devicePixelRatio || 1
+    const x = pos.x / ratio
+    const y = pos.y / ratio
+    return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+  }
   unlistenDragDrop = await getCurrentWebview().onDragDropEvent(async (event) => {
-    if (event.payload.type === 'enter' || event.payload.type === 'over') {
-      dragOver.value = true
-    } else if (event.payload.type === 'leave') {
+    if (event.payload.type === 'leave') {
       dragOver.value = false
+    } else if (!isOverPanel(event.payload.position)) {
+      dragOver.value = false
+    } else if (event.payload.type === 'enter' || event.payload.type === 'over') {
+      dragOver.value = true
     } else if (event.payload.type === 'drop') {
       dragOver.value = false
       const paths = event.payload.paths
@@ -1538,7 +1551,7 @@ watch(viewMode, () => {
 </script>
 
 <template>
-  <div class="remote-panel" :class="{ 'drag-over': dragOver }">
+  <div ref="panelEl" class="remote-panel" :class="{ 'drag-over': dragOver }">
     <!-- Breadcrumb path bar -->
     <div class="path-bar" @contextmenu.prevent="onPathBarContextMenu">
       <div class="nav-btns">
