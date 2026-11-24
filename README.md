@@ -18,10 +18,11 @@ A fast, lightweight, cross-platform SFTP/SCP GUI built with **Tauri 2 + Vue 3 + 
 - 🗒️ **Details View** — Windows Explorer-style list view (size, permissions, modified time), toggleable
 - ✅ **Multi-Select** — Ctrl+click to toggle entries, Shift+click for range selection
 - 🔍 **Adjustable Row Size** — Small / Medium / Large presets plus stepless zoom from 75 % to 250 % via Ctrl+wheel, `Ctrl+=` / `Ctrl+-` / `Ctrl+0` or the slider; row height, text, icons and column widths all scale together and the setting is remembered
-- 👁️ **File Preview** — Inline text preview pane with gray line numbers, soft wrap, copy support, and maximize/restore
-- ✏️ **Remote Quick-Edit** — Edit text files in place (paste/undo, Ctrl+S) and save straight back to the server
+- 👁️ **File Preview** — Inline text preview pane (files up to 10 MB) with gray line numbers, soft wrap, copy support, and maximize/restore
+- ✏️ **Remote Quick-Edit** — Edit text files up to 2 MB in place (paste/undo, Ctrl+S) and save straight back to the server
 - 🖱️ **Drag & Drop Upload** — Drag files or folders from your OS file manager to upload
 - 📥 **Copy / Paste Between Sessions** — Mark files with **Copy** in one tab (right-click or Ctrl/Cmd+C), **Paste** them (right-click or Ctrl/Cmd+V) into any folder of any other tab (host, container or pod); blank-space right-click offers Paste / New Folder / Refresh
+- 📎 **Paste From Explorer (Windows)** — Files copied in Explorer (or any app that puts a file list on the clipboard) can be pasted into any session to upload them; whichever clipboard was touched last wins. The direction is one-way: files copied in the app are not placed on the system clipboard
 - ⬇️ **Flexible Download** — Toolbar download, right-click **Download…** / **Save As…** context menu
 - 🗑️ **Delete with Confirmation** — Right-click → **Delete** removes selected files or folders (recursive) after a native confirmation dialog
 - 🗂️ **Directory Transfers** — Recursive folder upload/download/save-as, shown as an expandable tree in the queue
@@ -32,13 +33,15 @@ A fast, lightweight, cross-platform SFTP/SCP GUI built with **Tauri 2 + Vue 3 + 
 - 🕘 **Recent Folders (frecency)** — With many servers and folders that are busy for ~10 days and then forgotten, bookmarking everything doesn't work, so every folder you browse is remembered per server and ranked by visits weighted with a one-week half-life: it fades by itself, 📌 pin keeps it. The **Recent & Bookmarks** window opens on a per-server list (servers idle for two weeks start folded); history is capped per server so one busy host can't crowd out the rest
 - ⚡ **Quick Jump** — `Ctrl+P` searches recent folders and bookmarks of every server at once; `@prod logs` narrows to servers matching "prod". Enter switches to the tab already connected to that server, or connects with saved credentials (profile → bookmark → `~/.ssh/config`, asking for the password when only a password-less login is saved)
 - 🖥️ **Integrated Terminal** — Toolbar button opens a shell in the current directory (local PTY or SSH); browsing inside a container or pod auto-attaches via `docker`/`nerdctl`/`crictl`/`kubectl exec`. Multiple terminals per tab (each tab keeps its own set), resizable drawer height
-- 🔑 **Flexible Auth** — Password, private key (with passphrase), SSH agent
+- 🔑 **Auth** — Password or private key (with optional passphrase). SSH agent authentication is not implemented yet
 - 📋 **SSH Config Import** — Pick which `~/.ssh/config` hosts to import (checkbox picker with filter), including single-hop and multi-hop `ProxyJump` routes; only imported hosts appear in the fuzzy-search dropdown
 - ⚡ **Streaming SSH Downloads** — Fresh SSH-to-local downloads use a continuous exec-channel stream to avoid serial SFTP round trips; paused/resumed or unsupported transfers fall back to SFTP
 - 💾 **Saved Profiles** — Save connections (optionally with credentials) for quick reuse, with or without connecting; aliases are globally unique across profiles and SSH config hosts
 - ⧉ **Clone Connections** — One-click ⧉ in the host dropdown duplicates any saved profile or SSH config host as a new editable connection ("name copy")
 - 🗂️ **Multi-Tab** — Multiple concurrent SFTP sessions in tabs (labeled by SSH alias)
-- 📊 **Transfer Queue** — Live progress with sliding-window speed (network speed shown for local ⇄ remote transfers; server-side copies report live progress without a speed figure), detail view (from/to/size), and open-in-local-folder
+- ◫ **Split View** — `Ctrl+\` (or the ◫ toolbar button) puts two panes side by side, each with its own tabs, so two servers or two folders can be browsed and transferred between at once; drag the divider to resize, double-click it to even it out. Closing a side folds its tabs into the other
+- 🌓 **Light / Dark Theme** — Toggled from the toolbar
+- 📊 **Transfer Queue** — Up to 3 transfers run at once per session; live progress with sliding-window speed (network speed shown for local ⇄ remote transfers; server-side copies report live progress without a speed figure), detail view (from/to/size), and open-in-local-folder
 - 📦 **Tiny Binary** — ~10MB app bundle (vs ~150MB for Electron alternatives)
 - 🖥️ **Cross-Platform** — Native on Windows, macOS, and Linux
 
@@ -105,17 +108,18 @@ ShuttleSFTP/
 │   └── types/              # TypeScript interfaces
 ├── src-tauri/              # Rust backend
 │   └── src/
-│       ├── fs/             # RemoteFs trait, local/host/rootfs backends
+│       ├── fs/             # RemoteFs trait, local/host/rootfs backends, virtual path prefixes
 │       ├── ssh/            # SSH session, auth, SFTP ops
 │       ├── exec/           # Command runners (local & over SSH)
 │       ├── container/      # Container/pod discovery + exec file access
 │       ├── terminal/       # Interactive PTY terminals (SSH & local)
 │       ├── transfer/       # Transfer engine & progress
-│       ├── config/         # SSH config parser, profiles
-│       └── commands/       # Tauri IPC command handlers
+│       ├── config/         # SSH config parser, profiles, bookmarks, recent folders
+│       ├── commands/       # Tauri IPC command handlers
+│       └── clipboard.rs    # Read-only system clipboard file list (Windows)
+├── mocktest/               # Browser-only IPC mock + Puppeteer UI smoke tests
 ├── package.json
-├── vite.config.ts
-└── DESIGN.md               # Detailed architecture doc
+└── vite.config.ts
 ```
 
 ## Usage
@@ -136,6 +140,19 @@ ShuttleSFTP/
 14. **Terminal**: Click **🖥 Terminal** to open a shell in the current directory — a local PTY for "This Machine" sessions, an SSH shell for remote hosts, and an automatic `exec` attach when you're inside `/@containers/...` or `/@pods/...`. Each browser tab keeps its own terminals: use **+** in the drawer to open more, click a chip to switch, ✕ to close, and drag the drawer's top edge to resize
 15. **Row size**: Ctrl+wheel over the file listing (or `Ctrl+=` / `Ctrl+-`, `Ctrl+0` to reset) zooms rows between 75 % and 250 %. The **Aa** button at the right of the path bar offers Small / Medium / Large presets and a stepless slider; the setting is remembered
 
+### Keyboard Shortcuts
+
+| Keys | Action |
+|------|--------|
+| `Ctrl/Cmd+P` | Quick jump to a recent / bookmarked folder on any server |
+| `Ctrl/Cmd+\` | Split the view / close the split |
+| `Alt+←` / `Alt+→`, mouse back / forward | Back / Forward |
+| `Ctrl/Cmd+F` / `Esc` | Filter the current folder / close the filter |
+| `Ctrl/Cmd+C` / `Ctrl/Cmd+V` | Copy the selection / paste into the current folder |
+| `F2` | Rename the selected entry |
+| `Ctrl/Cmd+S` | Save while editing a file |
+| `Ctrl+wheel` / `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Row size: zoom in / out / reset |
+
 ### ProxyJump
 
 Imported SSH config hosts support direct jump destinations, aliases and comma-separated multi-hop routes:
@@ -153,7 +170,7 @@ Host production
   ProxyJump bastion
 ```
 
-`ProxyJump user@host:port`, bracketed IPv6 addresses, `Host *` defaults, wildcard rules, multi-name `Host` blocks and `Keyword=value` syntax are supported. The connection dialog shows the resolved jump route and lets each hop use its configured key plus an optional passphrase, or a separate password. When hop credentials are left blank, the target credentials are reused.
+`ProxyJump user@host:port`, bracketed IPv6 addresses, `Host *` defaults, wildcard rules, multi-name `Host` blocks and `Keyword=value` syntax are supported. Only `HostName`, `Port`, `User`, `IdentityFile` and `ProxyJump` are read; other directives (`Include`, `Match`, `ProxyCommand`, …) are ignored. The connection dialog shows the resolved jump route and lets each hop use its configured key plus an optional passphrase, or a separate password. When hop credentials are left blank, the target credentials are reused.
 
 The app stores only the selected SSH config host names, then rereads `~/.ssh/config` when it starts. Existing imported entries therefore pick up ProxyJump changes without being re-imported; already-open sessions must reconnect. Profiles cloned from SSH config and existing bookmarks are independent copies of their routes.
 
@@ -179,11 +196,18 @@ All settings are stored as plain JSON under `~/.config/shuttle-sftp/` on every p
 
 | File | Contents |
 |------|----------|
-| `profiles.json` | Saved connection profiles |
-| `bookmarks.json` | Bookmarked remote paths |
+| `profiles.json` | Saved connection profiles; a password or key passphrase is included only when "Save password" / "Save passphrase" is ticked, and then in **plain text** |
+| `bookmarks.json` | Bookmarked remote paths (same credential rule as profiles) |
 | `recent.json` | Visited folders per server (up to 800, 80 per server), ranked by frecency; pinned entries are kept. Holds no credentials |
 | `imported_ssh_hosts.json` | `~/.ssh/config` hosts imported into the connect dialog |
 | `transfers.json` | Transfer queue state (enables resume after restart) |
+
+UI preferences — theme, row size, split position and columns / details view — live in the WebView's `localStorage`, not in these files.
+
+### Security notes
+
+- **Host keys are not verified.** Every server key is accepted; there is no `known_hosts` check yet, so the first connection to a spoofed host is not detected
+- Saved credentials are stored unencrypted (see `profiles.json` above); don't save them on shared machines
 
 ## CI / Releases
 
@@ -221,6 +245,9 @@ GitHub Actions builds installers for all platforms and publishes them to a GitHu
 - [x] K8s pod file access (`/@pods` — kubectl exec, namespace → pod → container)
 - [x] Any-to-any copy (Copy/Paste + drag & drop across sessions, server-side fast path)
 - [x] Clone & save connections (duplicate profiles / SSH config hosts, save without connecting, unique aliases)
+- [x] Split view (two panes, each with its own tabs)
+- [ ] SSH agent authentication
+- [ ] Host key verification (`known_hosts`)
 - [ ] SSH agent forwarding
 - [x] Integrated terminal (local PTY / SSH shell, container & pod auto-attach, multi-terminal per tab)
 - [ ] Proxy support (SOCKS5/HTTP)
